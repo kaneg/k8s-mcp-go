@@ -8,13 +8,5 @@
     "url": "https://github.com/kaneg/k8s-mcp-go",
     "source": "github"
   },
-  "packages": [
-    {
-      "registryType": "oci",
-      "identifier": "ghcr.io/kaneg/k8s-mcp-go:0.4.0",
-      "transport": {
-        "type": "stdio"
-      }
-    }
-  ]
+  "packages": []
 }

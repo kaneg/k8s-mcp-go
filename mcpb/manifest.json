@@ -1,0 +1,75 @@
+{
+  "manifest_version": "0.3",
+  "name": "k8s-mcp-go",
+  "display_name": "K8s MCP Server (Go)",
+  "version": "0.0.0",
+  "description": "Safe, read-only-by-default Kubernetes access for AI agents with permission modes.",
+  "long_description": "A lightweight MCP server providing safe Kubernetes cluster access for AI agents. Features three permission modes (readonly/readwrite/dangerous) to prevent accidental destructive operations. Written in Go with zero dependencies beyond kubeconfig. Supports 26 tools covering Pods, Deployments, StatefulSets, Services, ConfigMaps, Nodes, Namespaces, and Events.",
+  "author": {
+    "name": "Kane",
+    "email": "gzkaneg@gmail.com"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kaneg/k8s-mcp-go.git"
+  },
+  "homepage": "https://github.com/kaneg/k8s-mcp-go",
+  "support": "https://github.com/kaneg/k8s-mcp-go/issues",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/k8s-mcp-go",
+    "mcp_config": {
+      "command": "${__dirname}/server/k8s-mcp-go",
+      "args": ["-mode", "${user_config.mode}"],
+      "env": {},
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}\\server\\k8s-mcp-go.exe"
+        }
+      }
+    }
+  },
+  "tools": [
+    { "name": "list_pods", "description": "List pods in a namespace" },
+    { "name": "get_pod", "description": "Get detailed pod information" },
+    { "name": "describe_pod", "description": "Describe a pod (kubectl describe)" },
+    { "name": "pod_logs", "description": "Get pod logs" },
+    { "name": "list_deployments", "description": "List deployments" },
+    { "name": "get_deployment", "description": "Get deployment details" },
+    { "name": "scale_deployment", "description": "Scale a deployment [readwrite]" },
+    { "name": "restart_deployment", "description": "Rolling restart a deployment [readwrite]" },
+    { "name": "restart_statefulset", "description": "Rolling restart a statefulset [readwrite]" },
+    { "name": "list_services", "description": "List services" },
+    { "name": "get_service", "description": "Get service details" },
+    { "name": "list_configmaps", "description": "List ConfigMaps" },
+    { "name": "get_configmap", "description": "Get ConfigMap data" },
+    { "name": "list_nodes", "description": "List cluster nodes" },
+    { "name": "get_node", "description": "Get node details" },
+    { "name": "list_namespaces", "description": "List namespaces" },
+    { "name": "list_events", "description": "List events" },
+    { "name": "delete_pod", "description": "Delete a pod [dangerous]" },
+    { "name": "delete_deployment", "description": "Delete a deployment [dangerous]" },
+    { "name": "delete_service", "description": "Delete a service [dangerous]" },
+    { "name": "delete_configmap", "description": "Delete a ConfigMap [dangerous]" },
+    { "name": "delete_namespace", "description": "Delete a namespace [dangerous]" },
+    { "name": "drain_node", "description": "Drain a node [dangerous]" },
+    { "name": "uncordon_node", "description": "Uncordon a node [dangerous]" },
+    { "name": "cordon_node", "description": "Cordon a node [dangerous]" },
+    { "name": "top_pods", "description": "Get pod resource usage (requires metrics-server)" }
+  ],
+  "tools_generated": false,
+  "keywords": ["kubernetes", "k8s", "mcp", "devops", "cluster", "kubectl"],
+  "compatibility": {
+    "platforms": ["darwin", "linux", "win32"]
+  },
+  "user_config": {
+    "mode": {
+      "type": "string",
+      "title": "Permission Mode",
+      "description": "Permission mode: readonly (default, safe for exploration), readwrite (allows scaling/restarting), dangerous (allows deletion)",
+      "default": "readonly",
+      "required": false
+    }
+  }
+}
