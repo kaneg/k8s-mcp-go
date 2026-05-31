@@ -37,15 +37,29 @@ release:
 
 dockers:
   - image_templates:
-      - "ghcr.io/kaneg/k8s-mcp-go:{{ .Version }}"
-      - "ghcr.io/kaneg/k8s-mcp-go:latest"
+      - "ghcr.io/kaneg/k8s-mcp-go:{{ .Version }}-amd64"
+    use: buildx
+    goarch: amd64
+    goos: linux
     dockerfile: Dockerfile
     build_flag_templates:
+      - "--platform=linux/amd64"
       - "--label=io.modelcontextprotocol.server.name=io.github.kaneg/k8s-mcp-go"
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.source=https://github.com/kaneg/k8s-mcp-go"
+  - image_templates:
+      - "ghcr.io/kaneg/k8s-mcp-go:{{ .Version }}-arm64"
     use: buildx
+    goarch: arm64
+    goos: linux
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=io.modelcontextprotocol.server.name=io.github.kaneg/k8s-mcp-go"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/kaneg/k8s-mcp-go"
 
 docker_manifests:
   - name_template: "ghcr.io/kaneg/k8s-mcp-go:{{ .Version }}"
@@ -56,5 +70,3 @@ docker_manifests:
     image_templates:
       - "ghcr.io/kaneg/k8s-mcp-go:{{ .Version }}-amd64"
       - "ghcr.io/kaneg/k8s-mcp-go:{{ .Version }}-arm64"
-
-

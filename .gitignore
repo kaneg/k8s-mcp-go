@@ -4,7 +4,6 @@ k8s-mcp-go
 
 # Go
 vendor/
-go.sum
 
 # IDE
 .idea/
