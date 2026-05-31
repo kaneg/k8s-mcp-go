@@ -1,20 +1,33 @@
 # k8s-mcp-go
 
-A high-performance Kubernetes MCP Server written in Go. Bridges AI agents (Claude, Cursor, Codex, etc.) to your K8s cluster.
+**Safe Kubernetes access for AI agents.** 
 
-## Features
+You want AI to *look at* your cluster. You don't want it to *accidentally delete everything in production*. This MCP server lets you draw the line.
 
-- **25 MCP Tools** — read, write, and dangerous operations
-- **3-tier permission model** — readonly (default), readwrite, dangerous
-- **Zero configuration** — auto-detects `~/.kube/config`
-- **Single binary** — no dependencies, no runtime
-- **Fast** — Go implementation, instant startup
+```bash
+# AI can only read. No writes. No surprises.
+k8s-mcp-go
+```
+
+## Why
+
+Giving AI agents raw `kubectl` access is terrifying. There's nothing stopping it from running `kubectl delete ns production` when it's confused. And it *will* get confused eventually.
+
+k8s-mcp-go sits between your AI and the cluster with a simple rule: **you decide what it can do**.
+
+| What you want | Mode |
+|---------------|------|
+| "Let AI explore and diagnose, but don't touch anything" | `--mode=readonly` (default) |
+| "OK, it can scale and restart deployments" | `--mode=readwrite` |
+| "Full access, I know what I'm doing" | `--mode=dangerous` |
+
+That's it. Default is readonly. Everything else is opt-in.
 
 ## Quick Start
 
 ### 1. Download
 
-Download the latest binary from [Releases](https://github.com/kaneg/k8s-mcp-go/releases/latest).
+Grab the latest binary from [Releases](https://github.com/kaneg/k8s-mcp-go/releases/latest).
 
 | OS | Arch | File |
 |----|------|------|
@@ -31,22 +44,9 @@ chmod +x k8s-mcp-go
 sudo mv k8s-mcp-go /usr/local/bin/
 ```
 
-### 2. Run
+### 2. Add to your MCP client
 
-```bash
-# Readonly mode (default, safest)
-k8s-mcp-go
-
-# Readwrite mode (enables scale, restart, update image)
-k8s-mcp-go --mode=readwrite
-
-# Dangerous mode (enables delete, apply)
-k8s-mcp-go --mode=dangerous
-```
-
-### 3. Connect to your MCP client
-
-**Claude Desktop** — add to `claude_desktop_config.json`:
+**Claude Desktop** (`claude_desktop_config.json`):
 
 ```json
 {
@@ -59,7 +59,7 @@ k8s-mcp-go --mode=dangerous
 }
 ```
 
-**Cursor** — add to `.cursor/mcp.json`:
+**Cursor** (`.cursor/mcp.json`):
 
 ```json
 {
@@ -72,19 +72,21 @@ k8s-mcp-go --mode=dangerous
 }
 ```
 
-> **Note:** If you didn't install to `/usr/local/bin/`, use the full path to the binary in the `command` field.
+That's it. Restart your client and start asking questions about your cluster.
 
 ## Permission Modes
 
-| Mode | Flag | What's included |
-|------|------|-----------------|
-| 🔵 `readonly` | `--mode=readonly` (default) | 18 read-only tools |
-| 🟡 `readwrite` | `--mode=readwrite` | readonly + 6 write tools |
-| 🔴 `dangerous` | `--mode=dangerous` | readwrite + 4 destructive tools |
+| Mode | Flag | AI can... |
+|------|------|-----------|
+| 🔵 **readonly** | `--mode=readonly` (default) | View everything, change nothing |
+| 🟡 **readwrite** | `--mode=readwrite` | Scale, restart, update images |
+| 🔴 **dangerous** | `--mode=dangerous` | Delete resources, apply arbitrary YAML |
+
+Each tool checks permissions at runtime. If AI tries something outside its mode, it gets a clear "permission denied" error — not a silent failure.
 
 ## Tools
 
-### 🔍 Readonly Tools (18)
+### 🔍 Readonly (18 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -107,7 +109,7 @@ k8s-mcp-go --mode=dangerous
 | `list_ingress` | List Ingress resources |
 | `list_jobs` | List Jobs |
 
-### ✏️ Readwrite Tools (6)
+### ✏️ Readwrite (+6 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -118,7 +120,7 @@ k8s-mcp-go --mode=dangerous
 | `create_namespace` | Create a new namespace |
 | `patch_deployment` | Apply strategic merge patch |
 
-### ⚠️ Dangerous Tools (4)
+### ⚠️ Dangerous (+4 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -133,17 +135,7 @@ k8s-mcp-go --mode=dangerous
 |----------|-------------|
 | `KUBECONFIG` | Path to kubeconfig file (default: `~/.kube/config`) |
 
-## Security Model
-
-- **Default mode is readonly** — AI can only view, never modify
-- **Write mode** enables safe mutations (scale, restart, update image)
-- **Dangerous mode** required for deletes and arbitrary YAML
-- Each tool explicitly checks permissions at runtime
-- Permission denied errors include the required mode
-
 ## Build from Source
-
-If you want to build locally:
 
 ```bash
 git clone https://github.com/kaneg/k8s-mcp-go.git

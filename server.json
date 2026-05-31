@@ -1,0 +1,22 @@
+{
+  "$schema": "https://modelcontextprotocol.io/schema/server.json",
+  "name": "io.github.kaneg/k8s-mcp-go",
+  "title": "K8s MCP Server (Go)",
+  "description": "Safe, read-only-by-default Kubernetes access for AI agents. 25 MCP tools with three permission modes (readonly/readwrite/dangerous). Written in Go, zero dependencies beyond kubeconfig.",
+  "version": "0.3.0",
+  "websiteUrl": "https://github.com/kaneg/k8s-mcp-go",
+  "repository": {
+    "url": "https://github.com/kaneg/k8s-mcp-go",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "docker",
+      "identifier": "ghcr.io/kaneg/k8s-mcp-go",
+      "version": "0.3.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

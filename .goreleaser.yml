@@ -34,3 +34,27 @@ release:
   github:
     owner: kaneg
     name: k8s-mcp-go
+
+dockers:
+  - image_templates:
+      - "ghcr.io/kaneg/k8s-mcp-go:{{ .Version }}"
+      - "ghcr.io/kaneg/k8s-mcp-go:latest"
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--label=io.modelcontextprotocol.server.name=io.github.kaneg/k8s-mcp-go"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/kaneg/k8s-mcp-go"
+    use: buildx
+
+docker_manifests:
+  - name_template: "ghcr.io/kaneg/k8s-mcp-go:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/kaneg/k8s-mcp-go:{{ .Version }}-amd64"
+      - "ghcr.io/kaneg/k8s-mcp-go:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/kaneg/k8s-mcp-go:latest"
+    image_templates:
+      - "ghcr.io/kaneg/k8s-mcp-go:{{ .Version }}-amd64"
+      - "ghcr.io/kaneg/k8s-mcp-go:{{ .Version }}-arm64"
+
+
