@@ -1,70 +1,127 @@
 # k8s-mcp-go
 
-A high-performance Kubernetes MCP Server written in Go.
+A high-performance Kubernetes MCP Server written in Go. Bridges AI agents (Claude, Cursor, Codex, etc.) to your K8s cluster.
 
-Single binary, zero dependencies beyond kubectl config — connects AI agents to your K8s cluster via the [Model Context Protocol](https://modelcontextprotocol.io).
+## Features
 
-## Why?
+- **25 MCP Tools** — read, write, and dangerous operations
+- **3-tier permission model** — readonly (default), readwrite, dangerous
+- **Zero configuration** — auto-detects `~/.kube/config`
+- **Single binary** — no dependencies, no runtime
+- **Fast** — Go implementation, instant startup
 
-Existing K8s MCP servers are written in Python/TypeScript. This one is:
+## Permission Modes
 
-- **Fast** — Go native, starts in milliseconds
-- **Lightweight** — single binary, ~15MB
-- **Zero config** — uses your existing `~/.kube/config`
-- **Read-only (MVP)** — safe to run, no mutations
+| Mode | Flag | Tools Available |
+|------|------|-----------------|
+| `readonly` | `--mode=readonly` (default) | 18 read-only tools |
+| `readwrite` | `--mode=readwrite` | + 6 write tools |
+| `dangerous` | `--mode=dangerous` | + 4 destructive tools |
+
+## Quick Start
+
+```bash
+# Build
+go build -o k8s-mcp-go .
+
+# Run in readonly mode (default, safest)
+./k8s-mcp-go
+
+# Run with write access
+./k8s-mcp-go --mode=readwrite
+
+# Run with full access (careful!)
+./k8s-mcp-go --mode=dangerous
+```
 
 ## Tools
+
+### 🔍 Readonly Tools (18)
 
 | Tool | Description |
 |------|-------------|
 | `list_pods` | List pods in a namespace |
-| `get_pod` | Get detailed pod info (containers, status, events) |
-| `get_pod_logs` | Get pod logs (with tail, container selection) |
-| `list_services` | List services in a namespace |
-| `get_service` | Get detailed service info + endpoints |
-| `list_deployments` | List deployments in a namespace |
-| `get_deployment` | Get deployment status & conditions |
+| `get_pod` | Get pod details (containers, status, conditions) |
+| `get_pod_logs` | Get pod logs (supports previous instance) |
+| `list_services` | List services with type, IP, ports |
+| `get_service` | Get service details + endpoints |
+| `list_deployments` | List deployments with replica status |
+| `get_deployment` | Get deployment details |
 | `list_namespaces` | List all namespaces |
-| `list_nodes` | List nodes with resource info |
-| `cluster_overview` | Cluster-wide summary (health, counts, issues) |
+| `list_nodes` | List nodes with status, roles, version |
+| `cluster_overview` | Cluster health summary with problem detection |
+| `get_events` | Get events (filterable by kind/name) |
+| `list_configmaps` | List ConfigMaps |
+| `get_configmap` | Get ConfigMap data |
+| `list_secrets` | List Secrets (keys only) |
+| `get_secret` | Get Secret metadata (values hidden by default) |
+| `list_pvc` | List PersistentVolumeClaims |
+| `list_ingress` | List Ingress resources |
+| `list_jobs` | List Jobs |
 
-## Install
+### ✏️ Readwrite Tools (6)
 
-```bash
-go install github.com/kaneg/k8s-mcp-go@latest
-```
+| Tool | Description |
+|------|-------------|
+| `restart_deployment` | Rolling restart a deployment |
+| `scale_deployment` | Scale deployment replicas |
+| `set_image` | Update container image |
+| `rollout_status` | Check rollout progress |
+| `create_namespace` | Create a new namespace |
+| `patch_deployment` | Apply strategic merge patch |
 
-Or download from [Releases](https://github.com/kaneg/k8s-mcp-go/releases).
+### ⚠️ Dangerous Tools (4)
 
-## Usage
+| Tool | Description |
+|------|-------------|
+| `delete_pod` | Delete a pod |
+| `delete_deployment` | Delete a deployment |
+| `delete_namespace` | Delete namespace + ALL resources |
+| `apply_yaml` | Apply arbitrary YAML manifest |
 
-```bash
-# Run with default kubeconfig (~/.kube/config)
-k8s-mcp-go
+## MCP Client Configuration
 
-# Use custom kubeconfig
-KUBECONFIG=/path/to/config k8s-mcp-go
-```
-
-### With Claude Desktop / Cursor / Codex
+### Claude Desktop
 
 ```json
 {
   "mcpServers": {
     "k8s": {
-      "command": "k8s-mcp-go"
+      "command": "/path/to/k8s-mcp-go",
+      "args": ["--mode=readonly"]
     }
   }
 }
 ```
 
-## Example Questions
+### Cursor
 
-- "What pods are running in the default namespace?"
-- "Why is my pod CrashLoopBackOff?"
-- "Show me the cluster overview"
-- "Which nodes have high CPU usage?"
-- "What services are exposed in the kube-system namespace?"
+Add to `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "k8s": {
+      "command": "/path/to/k8s-mcp-go",
+      "args": ["--mode=readwrite"]
+    }
+  }
+}
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `KUBECONFIG` | Path to kubeconfig file (default: `~/.kube/config`) |
+
+## Security Model
+
+- **Default mode is readonly** — AI can only view, never modify
+- **Write mode** enables safe mutations (scale, restart, update image)
+- **Dangerous mode** required for deletes and arbitrary YAML
+- Each tool explicitly checks permissions at runtime
+- Permission denied errors include the required mode
 
 ## License
 
