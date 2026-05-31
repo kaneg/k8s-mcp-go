@@ -10,29 +10,77 @@ A high-performance Kubernetes MCP Server written in Go. Bridges AI agents (Claud
 - **Single binary** — no dependencies, no runtime
 - **Fast** — Go implementation, instant startup
 
-## Permission Modes
-
-| Mode | Flag | Tools Available |
-|------|------|-----------------|
-| `readonly` | `--mode=readonly` (default) | 18 read-only tools |
-| `readwrite` | `--mode=readwrite` | + 6 write tools |
-| `dangerous` | `--mode=dangerous` | + 4 destructive tools |
-
 ## Quick Start
 
+### 1. Download
+
+Download the latest binary from [Releases](https://github.com/kaneg/k8s-mcp-go/releases/latest).
+
+| OS | Arch | File |
+|----|------|------|
+| Linux | x86_64 | `k8s-mcp-go_*_linux_amd64.tar.gz` |
+| Linux | ARM64 | `k8s-mcp-go_*_linux_arm64.tar.gz` |
+| macOS | Intel | `k8s-mcp-go_*_darwin_amd64.tar.gz` |
+| macOS | Apple Silicon | `k8s-mcp-go_*_darwin_arm64.tar.gz` |
+| Windows | x86_64 | `k8s-mcp-go_*_windows_amd64.zip` |
+
 ```bash
-# Build
-go build -o k8s-mcp-go .
-
-# Run in readonly mode (default, safest)
-./k8s-mcp-go
-
-# Run with write access
-./k8s-mcp-go --mode=readwrite
-
-# Run with full access (careful!)
-./k8s-mcp-go --mode=dangerous
+# Example: Linux x86_64
+tar xzf k8s-mcp-go_*_linux_amd64.tar.gz
+chmod +x k8s-mcp-go
+sudo mv k8s-mcp-go /usr/local/bin/
 ```
+
+### 2. Run
+
+```bash
+# Readonly mode (default, safest)
+k8s-mcp-go
+
+# Readwrite mode (enables scale, restart, update image)
+k8s-mcp-go --mode=readwrite
+
+# Dangerous mode (enables delete, apply)
+k8s-mcp-go --mode=dangerous
+```
+
+### 3. Connect to your MCP client
+
+**Claude Desktop** — add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "k8s": {
+      "command": "k8s-mcp-go",
+      "args": ["--mode=readonly"]
+    }
+  }
+}
+```
+
+**Cursor** — add to `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "k8s": {
+      "command": "k8s-mcp-go",
+      "args": ["--mode=readonly"]
+    }
+  }
+}
+```
+
+> **Note:** If you didn't install to `/usr/local/bin/`, use the full path to the binary in the `command` field.
+
+## Permission Modes
+
+| Mode | Flag | What's included |
+|------|------|-----------------|
+| 🔵 `readonly` | `--mode=readonly` (default) | 18 read-only tools |
+| 🟡 `readwrite` | `--mode=readwrite` | readonly + 6 write tools |
+| 🔴 `dangerous` | `--mode=dangerous` | readwrite + 4 destructive tools |
 
 ## Tools
 
@@ -79,36 +127,6 @@ go build -o k8s-mcp-go .
 | `delete_namespace` | Delete namespace + ALL resources |
 | `apply_yaml` | Apply arbitrary YAML manifest |
 
-## MCP Client Configuration
-
-### Claude Desktop
-
-```json
-{
-  "mcpServers": {
-    "k8s": {
-      "command": "/path/to/k8s-mcp-go",
-      "args": ["--mode=readonly"]
-    }
-  }
-}
-```
-
-### Cursor
-
-Add to `.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "k8s": {
-      "command": "/path/to/k8s-mcp-go",
-      "args": ["--mode=readwrite"]
-    }
-  }
-}
-```
-
 ## Environment Variables
 
 | Variable | Description |
@@ -122,6 +140,16 @@ Add to `.cursor/mcp.json`:
 - **Dangerous mode** required for deletes and arbitrary YAML
 - Each tool explicitly checks permissions at runtime
 - Permission denied errors include the required mode
+
+## Build from Source
+
+If you want to build locally:
+
+```bash
+git clone https://github.com/kaneg/k8s-mcp-go.git
+cd k8s-mcp-go
+go build -o k8s-mcp-go .
+```
 
 ## License
 
