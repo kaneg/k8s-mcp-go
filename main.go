@@ -115,6 +115,11 @@ type RolloutInput struct {
 	Namespace string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
 }
 
+type StatefulSetInput struct {
+	Name      string `json:"name" jsonschema:"StatefulSet name"`
+	Namespace string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
+}
+
 type PatchInput struct {
 	Name      string `json:"name" jsonschema:"Resource name"`
 	Namespace string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
@@ -490,6 +495,77 @@ func main() {
 		if len(d.Status.Conditions) > 0 {
 			lines = append(lines, "\nConditions:")
 			for _, cond := range d.Status.Conditions {
+				lines = append(lines, fmt.Sprintf("  %s: %s - %s", cond.Type, cond.Status, cond.Message))
+			}
+		}
+		return textResult(strings.Join(lines, "\n")), nil, nil
+	})
+
+	// list_statefulsets
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "list_statefulsets",
+		Description: "[READONLY] List all StatefulSets in a namespace with replica status",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespaceInput) (*mcp.CallToolResult, any, error) {
+		ns := nsOrDefault(input.Namespace)
+		stss, err := k8s.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return errResult("failed to list statefulsets: %v", err), nil, nil
+		}
+
+		var lines []string
+		lines = append(lines, fmt.Sprintf("StatefulSets in namespace '%s' (%d total):\n", ns, len(stss.Items)))
+		lines = append(lines, "NAME | READY | AGE")
+		lines = append(lines, "-----|-------|----")
+		for _, s := range stss.Items {
+			var desired int32
+			if s.Spec.Replicas != nil {
+				desired = *s.Spec.Replicas
+			}
+			lines = append(lines, fmt.Sprintf("%s | %d/%d | %s",
+				s.Name, s.Status.ReadyReplicas, desired, ageStr(s.CreationTimestamp)))
+		}
+		return textResult(strings.Join(lines, "\n")), nil, nil
+	})
+
+	// get_statefulset
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_statefulset",
+		Description: "[READONLY] Get detailed StatefulSet info including replica status, update strategy, and containers",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input StatefulSetInput) (*mcp.CallToolResult, any, error) {
+		if input.Name == "" {
+			return errResult("name is required"), nil, nil
+		}
+		ns := nsOrDefault(input.Namespace)
+		s, err := k8s.AppsV1().StatefulSets(ns).Get(ctx, input.Name, metav1.GetOptions{})
+		if err != nil {
+			return errResult("failed to get statefulset: %v", err), nil, nil
+		}
+
+		var lines []string
+		var desired int32
+		if s.Spec.Replicas != nil {
+			desired = *s.Spec.Replicas
+		}
+		lines = append(lines, fmt.Sprintf("StatefulSet: %s/%s", ns, s.Name))
+		lines = append(lines, fmt.Sprintf("Replicas: %d desired | %d ready | %d updated | %d available",
+			desired, s.Status.ReadyReplicas, s.Status.UpdatedReplicas, s.Status.AvailableReplicas))
+		lines = append(lines, fmt.Sprintf("ServiceName: %s", s.Spec.ServiceName))
+		updateStrategy := "RollingUpdate"
+		if s.Spec.UpdateStrategy.Type != "" {
+			updateStrategy = string(s.Spec.UpdateStrategy.Type)
+		}
+		lines = append(lines, fmt.Sprintf("UpdateStrategy: %s", updateStrategy))
+
+		if len(s.Spec.Template.Spec.Containers) > 0 {
+			lines = append(lines, "\nContainers:")
+			for _, c := range s.Spec.Template.Spec.Containers {
+				lines = append(lines, fmt.Sprintf("  %s: %s", c.Name, c.Image))
+			}
+		}
+
+		if len(s.Status.Conditions) > 0 {
+			lines = append(lines, "\nConditions:")
+			for _, cond := range s.Status.Conditions {
 				lines = append(lines, fmt.Sprintf("  %s: %s - %s", cond.Type, cond.Status, cond.Message))
 			}
 		}
@@ -941,6 +1017,28 @@ func main() {
 		}
 
 		return textResult(fmt.Sprintf("Deployment %s/%s restarted successfully. Use rollout_status to monitor progress.", ns, input.Name)), nil, nil
+	})
+
+	// restart_statefulset
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "restart_statefulset",
+		Description: "[READWRITE] Restart a statefulset (kubectl rollout restart). Triggers rolling update.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input RolloutInput) (*mcp.CallToolResult, any, error) {
+		if !requireReadWrite("restart_statefulset") {
+			return permDeniedResult("restart_statefulset", ModeReadWrite), nil, nil
+		}
+		if input.Name == "" {
+			return errResult("name is required"), nil, nil
+		}
+		ns := nsOrDefault(input.Namespace)
+
+		patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"%s"}}}}}`, time.Now().Format(time.RFC3339))
+		_, err := k8s.AppsV1().StatefulSets(ns).Patch(ctx, input.Name, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
+		if err != nil {
+			return errResult("failed to restart statefulset: %v", err), nil, nil
+		}
+
+		return textResult(fmt.Sprintf("StatefulSet %s/%s restarted successfully. Use rollout_status to monitor progress.", ns, input.Name)), nil, nil
 	})
 
 	// scale_deployment

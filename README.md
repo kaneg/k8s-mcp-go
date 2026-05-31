@@ -109,11 +109,12 @@ Each tool checks permissions at runtime. If AI tries something outside its mode,
 | `list_ingress` | List Ingress resources |
 | `list_jobs` | List Jobs |
 
-### ✏️ Readwrite (+6 tools)
+### ✏️ Readwrite (+7 tools)
 
 | Tool | Description |
 |------|-------------|
 | `restart_deployment` | Rolling restart a deployment |
+| `restart_statefulset` | Rolling restart a statefulset |
 | `scale_deployment` | Scale deployment replicas |
 | `set_image` | Update container image |
 | `rollout_status` | Check rollout progress |

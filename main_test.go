@@ -234,7 +234,7 @@ func TestToolDescriptions_HavePermissionPrefix(t *testing.T) {
 		"list_secrets", "get_secret", "list_pvc", "list_ingress", "list_jobs",
 	}
 	readwriteTools := []string{
-		"restart_deployment", "scale_deployment", "set_image",
+		"restart_deployment", "restart_statefulset", "scale_deployment", "set_image",
 		"rollout_status", "create_namespace", "patch_deployment",
 	}
 	dangerousTools := []string{
