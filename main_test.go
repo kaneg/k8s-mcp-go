@@ -229,9 +229,10 @@ func TestToolDescriptions_HavePermissionPrefix(t *testing.T) {
 	// This is a static check - we verify the expected tool list has correct prefixes
 	readonlyTools := []string{
 		"list_pods", "get_pod", "get_pod_logs", "list_services", "get_service",
-		"list_deployments", "get_deployment", "list_namespaces", "list_nodes",
-		"cluster_overview", "get_events", "list_configmaps", "get_configmap",
-		"list_secrets", "get_secret", "list_pvc", "list_ingress", "list_jobs",
+		"list_deployments", "get_deployment", "list_statefulsets", "get_statefulset",
+		"list_namespaces", "list_nodes", "cluster_overview", "get_events",
+		"list_configmaps", "get_configmap", "list_secrets", "get_secret",
+		"list_pvc", "list_ingress", "list_jobs",
 	}
 	readwriteTools := []string{
 		"restart_deployment", "restart_statefulset", "scale_deployment", "set_image",
@@ -247,8 +248,8 @@ func TestToolDescriptions_HavePermissionPrefix(t *testing.T) {
 
 	// Count total expected tools
 	total := len(readonlyTools) + len(readwriteTools) + len(dangerousTools)
-	if total != 28 {
-		t.Errorf("expected 28 tools total, got %d", total)
+	if total != 31 {
+		t.Errorf("expected 31 tools total, got %d", total)
 	}
 }
 

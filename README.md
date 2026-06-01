@@ -89,30 +89,32 @@ Restart your client and start asking questions about your cluster.
 
 Each tool checks permissions at runtime. If AI tries something outside its mode, it gets a clear "permission denied" error — not a silent failure.
 
-## Tools (26 total)
+## Tools (31 total)
 
-### 🔍 Readonly (18 tools)
+### 🔍 Readonly (20 tools)
 
 | Tool | Description |
 |------|-------------|
 | `list_pods` | List pods in a namespace |
 | `get_pod` | Get pod details |
-| `describe_pod` | Describe a pod (kubectl describe) |
-| `pod_logs` | Get pod logs |
+| `get_pod_logs` | Get pod logs |
 | `list_deployments` | List deployments |
 | `get_deployment` | Get deployment details |
+| `list_statefulsets` | List StatefulSets |
+| `get_statefulset` | Get StatefulSet details |
 | `list_services` | List services |
 | `get_service` | Get service details |
 | `list_configmaps` | List ConfigMaps |
 | `get_configmap` | Get ConfigMap data |
-| `list_nodes` | List cluster nodes |
-| `get_node` | Get node details |
-| `list_namespaces` | List namespaces |
-| `list_events` | List events |
-| `top_pods` | Get pod resource usage (requires metrics-server) |
-| `list_pvc` | List PersistentVolumeClaims |
 | `list_secrets` | List Secrets (keys only) |
+| `get_secret` | Get Secret metadata and keys |
+| `list_pvc` | List PersistentVolumeClaims |
+| `list_ingress` | List Ingress resources |
+| `list_jobs` | List Jobs |
+| `list_nodes` | List cluster nodes |
+| `list_namespaces` | List namespaces |
 | `cluster_overview` | Cluster health summary |
+| `get_events` | List events |
 
 ### ✏️ Readwrite (+7 tools)
 
