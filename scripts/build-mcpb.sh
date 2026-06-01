@@ -9,6 +9,39 @@ DIST_DIR="${2:?dist directory required}"
 MCPB_DIR="mcpb-build"
 rm -rf "$MCPB_DIR"
 mkdir -p "$MCPB_DIR"
+built_count=0
+
+find_binary() {
+  local os="$1"
+  local arch="$2"
+  local bin_name="$3"
+  local pattern candidate
+
+  for pattern in \
+    "$DIST_DIR/k8s-mcp-go_${os}_${arch}"*/"$bin_name" \
+    "$DIST_DIR/k8s-mcp-go_${VERSION}_${os}_${arch}"*/"$bin_name"; do
+    while IFS= read -r candidate; do
+      if [[ -f "$candidate" ]]; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done < <(compgen -G "$pattern" | sort)
+  done
+
+  return 1
+}
+
+sha256_file() {
+  local file="$1"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | awk '{print $1}'
+  else
+    openssl dgst -sha256 "$file" | awk '{print $2}'
+  fi
+}
 
 # Map GoReleaser binary paths to MCPB bundles
 platforms=(
@@ -23,27 +56,11 @@ platforms=(
 for entry in "${platforms[@]}"; do
   IFS=':' read -r platform bin_name mcpb_path <<< "$entry"
 
-  # GoReleaser output binary
-  if [[ "$platform" == windows_* ]]; then
-    BINARY="$DIST_DIR/k8s-mcp-go_${VERSION}_${platform%_*}/k8s-mcp-go.exe"
-  else
-    BINARY="$DIST_DIR/k8s-mcp-go_${VERSION}_${platform%_*}/k8s-mcp-go"
-  fi
-
-  # Handle GoReleaser naming: os_arch -> os/arch
-  # GoReleaser creates: dist/k8s-mcp-go_VERSION_linux_amd64_v1/k8s-mcp-go
   OS="${platform%_*}"
   ARCH="${platform#*_}"
-  GORELEASER_DIR="$DIST_DIR/k8s-mcp-go_${VERSION}_${OS}_${ARCH}"
 
-  if [[ "$OS" == "windows" ]]; then
-    BINARY="$GORELEASER_DIR/k8s-mcp-go.exe"
-  else
-    BINARY="$GORELEASER_DIR/k8s-mcp-go"
-  fi
-
-  if [[ ! -f "$BINARY" ]]; then
-    echo "WARN: Binary not found: $BINARY, skipping $platform"
+  if ! BINARY="$(find_binary "$OS" "$ARCH" "$bin_name")"; then
+    echo "WARN: Binary not found for $platform, skipping"
     continue
   fi
 
@@ -136,16 +153,23 @@ EOF
   MCPB_FILE="$MCPB_DIR/k8s-mcp-go_${VERSION}_${platform}.mcpb"
   (cd "$WORK" && zip -r "../../$MCPB_FILE" .)
   echo "Built: $MCPB_FILE ($(du -h "$MCPB_FILE" | cut -f1))"
+  built_count=$((built_count + 1))
 done
 
+if [[ "$built_count" -eq 0 ]]; then
+  echo "ERROR: no MCPB bundles were built from $DIST_DIR" >&2
+  exit 1
+fi
+
 # Copy all .mcpb files to dist for upload
-cp "$MCPB_DIR"/*.mcpb "$DIST_DIR/" 2>/dev/null || true
+mcpb_files=("$MCPB_DIR"/*.mcpb)
+cp "${mcpb_files[@]}" "$DIST_DIR/"
 
 # Generate SHA-256 hashes
 echo ""
 echo "=== SHA-256 Hashes ==="
-for mcpb in "$MCPB_DIR"/*.mcpb; do
-  HASH=$(openssl dgst -sha256 "$mcpb" | awk '{print $2}')
+for mcpb in "${mcpb_files[@]}"; do
+  HASH=$(sha256_file "$mcpb")
   BASENAME=$(basename "$mcpb")
   echo "$BASENAME: $HASH"
 done
