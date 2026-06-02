@@ -8,6 +8,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
 // ==================== nsOrDefault ====================
@@ -231,8 +233,8 @@ func TestToolDescriptions_HavePermissionPrefix(t *testing.T) {
 		"list_pods", "get_pod", "get_pod_logs", "list_services", "get_service",
 		"list_deployments", "get_deployment", "list_statefulsets", "get_statefulset",
 		"list_namespaces", "list_nodes", "cluster_overview", "get_events",
-		"list_configmaps", "get_configmap", "list_secrets", "get_secret",
-		"list_pvc", "list_ingress", "list_jobs",
+		"list_configmaps", "get_configmap", "list_secrets", "get_secret", "top_nodes",
+		"top_pods", "list_pvc", "list_ingress", "list_jobs",
 	}
 	readwriteTools := []string{
 		"restart_deployment", "restart_statefulset", "scale_deployment", "set_image",
@@ -248,8 +250,8 @@ func TestToolDescriptions_HavePermissionPrefix(t *testing.T) {
 
 	// Count total expected tools
 	total := len(readonlyTools) + len(readwriteTools) + len(dangerousTools)
-	if total != 31 {
-		t.Errorf("expected 31 tools total, got %d", total)
+	if total != 33 {
+		t.Errorf("expected 33 tools total, got %d", total)
 	}
 }
 
@@ -295,5 +297,47 @@ func TestModeConstants(t *testing.T) {
 	}
 	if ModeDangerous != "dangerous" {
 		t.Errorf("ModeDangerous = %q, want %q", ModeDangerous, "dangerous")
+	}
+}
+
+func TestFormatCPUUsage(t *testing.T) {
+	if got := formatCPUUsage(resource.MustParse("250m")); got != "250m" {
+		t.Errorf("formatCPUUsage(250m) = %q, want %q", got, "250m")
+	}
+	if got := formatCPUUsage(resource.MustParse("2")); got != "2000m" {
+		t.Errorf("formatCPUUsage(2) = %q, want %q", got, "2000m")
+	}
+}
+
+func TestFormatMemoryUsage(t *testing.T) {
+	if got := formatMemoryUsage(resource.MustParse("512Mi")); got != "512Mi" {
+		t.Errorf("formatMemoryUsage(512Mi) = %q, want %q", got, "512Mi")
+	}
+	if got := formatMemoryUsage(resource.MustParse("1536Mi")); got != "1.5Gi" {
+		t.Errorf("formatMemoryUsage(1536Mi) = %q, want %q", got, "1.5Gi")
+	}
+}
+
+func TestSumPodUsage(t *testing.T) {
+	pod := metricsv1beta1.PodMetrics{
+		Containers: []metricsv1beta1.ContainerMetrics{
+			{Usage: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("125m"),
+				corev1.ResourceMemory: resource.MustParse("256Mi"),
+			}},
+			{Usage: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("375m"),
+				corev1.ResourceMemory: resource.MustParse("768Mi"),
+			}},
+		},
+	}
+
+	cpu, mem := sumPodUsage(pod)
+
+	if got := formatCPUUsage(cpu); got != "500m" {
+		t.Errorf("summed cpu = %q, want %q", got, "500m")
+	}
+	if got := formatMemoryUsage(mem); got != "1.0Gi" {
+		t.Errorf("summed memory = %q, want %q", got, "1.0Gi")
 	}
 }

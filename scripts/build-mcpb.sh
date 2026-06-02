@@ -121,6 +121,8 @@ for entry in "${platforms[@]}"; do
     { "name": "list_pvc", "description": "List PersistentVolumeClaims" },
     { "name": "list_ingress", "description": "List Ingress resources" },
     { "name": "list_jobs", "description": "List Jobs" },
+    { "name": "top_nodes", "description": "Get current node CPU and memory usage" },
+    { "name": "top_pods", "description": "Get current pod CPU and memory usage" },
     { "name": "list_nodes", "description": "List cluster nodes" },
     { "name": "list_namespaces", "description": "List namespaces" },
     { "name": "cluster_overview", "description": "Get cluster health summary" },

@@ -89,9 +89,9 @@ Restart your client and start asking questions about your cluster.
 
 Each tool checks permissions at runtime. If AI tries something outside its mode, it gets a clear "permission denied" error — not a silent failure.
 
-## Tools (31 total)
+## Tools (33 total)
 
-### 🔍 Readonly (20 tools)
+### 🔍 Readonly (22 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -111,6 +111,8 @@ Each tool checks permissions at runtime. If AI tries something outside its mode,
 | `list_pvc` | List PersistentVolumeClaims |
 | `list_ingress` | List Ingress resources |
 | `list_jobs` | List Jobs |
+| `top_nodes` | Current node CPU and memory usage |
+| `top_pods` | Current pod CPU and memory usage |
 | `list_nodes` | List cluster nodes |
 | `list_namespaces` | List namespaces |
 | `cluster_overview` | Cluster health summary |

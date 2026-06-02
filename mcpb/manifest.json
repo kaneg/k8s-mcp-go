@@ -4,7 +4,7 @@
   "display_name": "K8s MCP Server (Go)",
   "version": "0.0.0",
   "description": "Safe, read-only-by-default Kubernetes access for AI agents with permission modes.",
-  "long_description": "A lightweight MCP server providing safe Kubernetes cluster access for AI agents. Features three permission modes (readonly/readwrite/dangerous) to prevent accidental destructive operations. Written in Go with zero dependencies beyond kubeconfig. Supports 31 tools covering Pods, Deployments, StatefulSets, Services, ConfigMaps, Secrets, PVCs, Ingresses, Jobs, Nodes, Namespaces, and Events.",
+  "long_description": "A lightweight MCP server providing safe Kubernetes cluster access for AI agents. Features three permission modes (readonly/readwrite/dangerous) to prevent accidental destructive operations. Written in Go with zero dependencies beyond kubeconfig. Supports 33 tools covering Pods, Pod Metrics, Deployments, StatefulSets, Services, ConfigMaps, Secrets, PVCs, Ingresses, Jobs, Node Metrics, Nodes, Namespaces, and Events.",
   "author": {
     "name": "Kane",
     "email": "gzkaneg@gmail.com"
@@ -47,6 +47,8 @@
     { "name": "list_pvc", "description": "List PersistentVolumeClaims" },
     { "name": "list_ingress", "description": "List Ingress resources" },
     { "name": "list_jobs", "description": "List Jobs" },
+    { "name": "top_nodes", "description": "Get current node CPU and memory usage" },
+    { "name": "top_pods", "description": "Get current pod CPU and memory usage" },
     { "name": "list_nodes", "description": "List cluster nodes" },
     { "name": "list_namespaces", "description": "List namespaces" },
     { "name": "cluster_overview", "description": "Get cluster health summary" },

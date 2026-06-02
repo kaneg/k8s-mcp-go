@@ -2,12 +2,15 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
 // nsOrDefault returns "default" if ns is empty, otherwise returns ns.
@@ -102,4 +105,35 @@ func normalizeTableLines(s string) []string {
 		}
 	}
 	return lines
+}
+
+func formatCPUUsage(q resource.Quantity) string {
+	return fmt.Sprintf("%dm", q.MilliValue())
+}
+
+func formatMemoryUsage(q resource.Quantity) string {
+	bytes := q.Value()
+	gi := float64(bytes) / float64(1024*1024*1024)
+	if math.Abs(gi-math.Round(gi)) < 0.05 {
+		return fmt.Sprintf("%.1fGi", gi)
+	}
+	if gi >= 1 {
+		return fmt.Sprintf("%.1fGi", gi)
+	}
+	mi := bytes / (1024 * 1024)
+	return fmt.Sprintf("%dMi", mi)
+}
+
+func sumPodUsage(pod metricsv1beta1.PodMetrics) (resource.Quantity, resource.Quantity) {
+	totalCPU := resource.MustParse("0")
+	totalMem := resource.MustParse("0")
+	for _, container := range pod.Containers {
+		if cpu, ok := container.Usage[corev1.ResourceCPU]; ok {
+			totalCPU.Add(cpu)
+		}
+		if mem, ok := container.Usage[corev1.ResourceMemory]; ok {
+			totalMem.Add(mem)
+		}
+	}
+	return totalCPU, totalMem
 }

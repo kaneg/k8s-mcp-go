@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 var version = "dev"
@@ -128,6 +130,10 @@ type PatchInput struct {
 
 type EmptyInput struct{}
 
+type TopPodsInput struct {
+	Namespace string `json:"namespace,omitempty" jsonschema:"Kubernetes namespace filter (default: all namespaces)"`
+}
+
 // --- Main ---
 
 func main() {
@@ -166,6 +172,12 @@ func main() {
 	k8s, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		logger.Error("failed to create kubernetes client", "error", err)
+		os.Exit(1)
+	}
+
+	metrics, err := metricsclient.NewForConfig(config)
+	if err != nil {
+		logger.Error("failed to create metrics client", "error", err)
 		os.Exit(1)
 	}
 
@@ -593,6 +605,35 @@ func main() {
 		return textResult(strings.Join(lines, "\n")), nil, nil
 	})
 
+	// top_nodes
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "top_nodes",
+		Description: "[READONLY] Get current CPU and memory usage for cluster nodes via metrics.k8s.io",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input EmptyInput) (*mcp.CallToolResult, any, error) {
+		nodeMetrics, err := metrics.MetricsV1beta1().NodeMetricses().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return errResult("failed to get node metrics: %v. Ensure metrics-server is installed and metrics.k8s.io is available", err), nil, nil
+		}
+
+		sort.Slice(nodeMetrics.Items, func(i, j int) bool {
+			return nodeMetrics.Items[i].Name < nodeMetrics.Items[j].Name
+		})
+
+		var lines []string
+		lines = append(lines, fmt.Sprintf("Node resource usage (%d total):\n", len(nodeMetrics.Items)))
+		lines = append(lines, "NAME | CPU | MEMORY | WINDOW")
+		lines = append(lines, "-----|-----|--------|-------")
+		for _, node := range nodeMetrics.Items {
+			lines = append(lines, fmt.Sprintf("%s | %s | %s | %s",
+				node.Name,
+				formatCPUUsage(node.Usage[corev1.ResourceCPU]),
+				formatMemoryUsage(node.Usage[corev1.ResourceMemory]),
+				node.Window.Duration.String(),
+			))
+		}
+		return textResult(strings.Join(lines, "\n")), nil, nil
+	})
+
 	// list_nodes
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_nodes",
@@ -697,6 +738,49 @@ func main() {
 			lines = append(lines, "\nNo problem pods detected.")
 		}
 
+		return textResult(strings.Join(lines, "\n")), nil, nil
+	})
+
+	// top_pods
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "top_pods",
+		Description: "[READONLY] Get current CPU and memory usage for pods via metrics.k8s.io",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input TopPodsInput) (*mcp.CallToolResult, any, error) {
+		ns := input.Namespace
+		if ns == "" {
+			ns = metav1.NamespaceAll
+		}
+
+		podMetrics, err := metrics.MetricsV1beta1().PodMetricses(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return errResult("failed to get pod metrics: %v. Ensure metrics-server is installed and metrics.k8s.io is available", err), nil, nil
+		}
+
+		sort.Slice(podMetrics.Items, func(i, j int) bool {
+			left := podMetrics.Items[i].Namespace + "/" + podMetrics.Items[i].Name
+			right := podMetrics.Items[j].Namespace + "/" + podMetrics.Items[j].Name
+			return left < right
+		})
+
+		scope := "all namespaces"
+		if input.Namespace != "" {
+			scope = fmt.Sprintf("namespace '%s'", input.Namespace)
+		}
+
+		var lines []string
+		lines = append(lines, fmt.Sprintf("Pod resource usage in %s (%d total):\n", scope, len(podMetrics.Items)))
+		lines = append(lines, "NAMESPACE | POD | CPU | MEMORY | WINDOW")
+		lines = append(lines, "----------|-----|-----|--------|-------")
+		for _, pod := range podMetrics.Items {
+			cpu, mem := sumPodUsage(pod)
+			lines = append(lines, fmt.Sprintf("%s | %s | %s | %s | %s",
+				pod.Namespace,
+				pod.Name,
+				formatCPUUsage(cpu),
+				formatMemoryUsage(mem),
+				pod.Window.Duration.String(),
+			))
+		}
 		return textResult(strings.Join(lines, "\n")), nil, nil
 	})
 
@@ -1262,5 +1346,4 @@ func main() {
 		os.Exit(1)
 	}
 }
-
 
