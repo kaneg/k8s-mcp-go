@@ -17,6 +17,12 @@ A Kubernetes MCP server that lets AI assistants inspect your cluster safely — 
 - **Kubernetes-native visibility**: inspect pods, deployments, services, logs, events, nodes, and live CPU/memory usage.
 - **Registry-ready distribution**: published as `io.github.kaneg/k8s-mcp-go` for MCP Registry consumers and packaged clients.
 
+## Distribution
+
+- [MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.kaneg/k8s-mcp-go): published as `io.github.kaneg/k8s-mcp-go`.
+- [PulseMCP](https://www.pulsemcp.com/servers/kaneg-k8s-mcp-go): indexed from the MCP ecosystem with the official `server.json`.
+- [Claude Code Marketplaces](https://claudemarketplaces.com/mcp/kaneg/k8s-mcp-go): listed with MCPB installation metadata.
+
 ## Why
 
 Most AI agents can use Kubernetes tools.
