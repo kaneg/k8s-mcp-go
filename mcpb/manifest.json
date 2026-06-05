@@ -3,8 +3,8 @@
   "name": "k8s-mcp-go",
   "display_name": "K8s MCP Server (Go)",
   "version": "0.0.0",
-  "description": "Safe, read-only-by-default Kubernetes access for AI agents with permission modes.",
-  "long_description": "A lightweight MCP server providing safe Kubernetes cluster access for AI agents. Features three permission modes (readonly/readwrite/dangerous) to prevent accidental destructive operations. Written in Go with zero dependencies beyond kubeconfig. Supports 33 tools covering Pods, Pod Metrics, Deployments, StatefulSets, Services, ConfigMaps, Secrets, PVCs, Ingresses, Jobs, Node Metrics, Nodes, Namespaces, and Events.",
+  "description": "Safe Kubernetes access for AI agents via MCP. Read-only by default, with explicit permission modes.",
+  "long_description": "A lightweight MCP server providing safe Kubernetes cluster access for AI agents. Features three permission modes (readonly/readwrite/dangerous) to prevent accidental destructive operations. Written in Go with zero dependencies beyond kubeconfig. Supports 34 tools covering server info, Pods, Pod Metrics, Deployments, StatefulSets, Services, ConfigMaps, Secrets, PVCs, Ingresses, Jobs, Node Metrics, Nodes, Namespaces, and Events.",
   "author": {
     "name": "Kane",
     "email": "gzkaneg@gmail.com"
@@ -31,6 +31,7 @@
     }
   },
   "tools": [
+    { "name": "server_info", "description": "Show server version, mode, kubeconfig path, and runtime details" },
     { "name": "list_pods", "description": "List pods in a namespace" },
     { "name": "get_pod", "description": "Get detailed pod information" },
     { "name": "get_pod_logs", "description": "Get pod logs" },
@@ -66,7 +67,7 @@
     { "name": "apply_yaml", "description": "Apply arbitrary YAML manifest [dangerous]" }
   ],
   "tools_generated": false,
-  "keywords": ["kubernetes", "k8s", "mcp", "devops", "cluster", "kubectl"],
+  "keywords": ["kubernetes", "k8s", "mcp", "mcp-server", "ai-agents", "devops", "cluster", "kubectl", "claude-desktop", "cursor", "readonly"],
   "compatibility": {
     "platforms": ["darwin", "linux", "win32"]
   },

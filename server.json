@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.kaneg/k8s-mcp-go",
   "title": "K8s MCP Server (Go)",
-  "description": "Safe, read-only-by-default K8s access for AI agents with permission modes.",
+  "description": "Safe Kubernetes access for AI agents via MCP. Read-only by default, with explicit permission modes.",
   "websiteUrl": "https://github.com/kaneg/k8s-mcp-go",
   "repository": {
     "url": "https://github.com/kaneg/k8s-mcp-go",

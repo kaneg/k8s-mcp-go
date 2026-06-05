@@ -4,6 +4,19 @@
 
 A Kubernetes MCP server that lets AI assistants inspect your cluster safely — without giving them unrestricted `kubectl`.
 
+![GitHub release](https://img.shields.io/github/v/release/kaneg/k8s-mcp-go?sort=semver)
+![License](https://img.shields.io/github/license/kaneg/k8s-mcp-go)
+![Go](https://img.shields.io/badge/Go-1.24+-00ADD8)
+![MCP](https://img.shields.io/badge/MCP-Kubernetes-326CE5)
+
+## What makes it different
+
+- **Read-only by default**: useful for diagnosis without giving AI permission to mutate the cluster.
+- **Explicit permission modes**: choose `readonly`, `readwrite`, or `dangerous` before the assistant starts.
+- **No Docker required**: install via MCPB bundles or a single native binary.
+- **Kubernetes-native visibility**: inspect pods, deployments, services, logs, events, nodes, and live CPU/memory usage.
+- **Registry-ready distribution**: published as `io.github.kaneg/k8s-mcp-go` for MCP Registry consumers and packaged clients.
+
 ## Why
 
 Most AI agents can use Kubernetes tools.
@@ -121,6 +134,18 @@ Then add it to your MCP client.
 ```
 
 Restart your client and start asking questions about your cluster.
+
+## Example prompts
+
+Once installed, ask your AI assistant things like:
+
+- "Show me unhealthy pods in all namespaces."
+- "Which pods are using the most memory?"
+- "Summarize recent warning events."
+- "Inspect this deployment and explain why it is not ready."
+- "Check rollout status for this deployment."
+
+In `readonly` mode, the assistant can investigate but cannot change the cluster.
 
 ## Why not just use kubectl?
 
