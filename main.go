@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,9 +15,16 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
 	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 )
@@ -1290,6 +1299,23 @@ func main() {
 	}
 
 	if shouldRegisterTool(*mode, ModeDangerous) {
+		dynamicClient, err := dynamic.NewForConfig(config)
+		if err != nil {
+			logger.Error("failed to create dynamic client", "error", err)
+			os.Exit(1)
+		}
+
+		discoveryClient, err := discovery.NewDiscoveryClientForConfig(config)
+		if err != nil {
+			logger.Error("failed to create discovery client", "error", err)
+			os.Exit(1)
+		}
+		apiGroupResources, err := restmapper.GetAPIGroupResources(discoveryClient)
+		if err != nil {
+			logger.Error("failed to discover API resources", "error", err)
+			os.Exit(1)
+		}
+		restMapper := restmapper.NewDiscoveryRESTMapper(apiGroupResources)
 
 		// delete_pod
 		mcp.AddTool(server, &mcp.Tool{
@@ -1372,9 +1398,12 @@ func main() {
 				return errResult("yaml content is required"), nil, nil
 			}
 
-			// Note: Full YAML apply would require kubectl runtime or dynamic client.
-			// For safety, we return an error suggesting kubectl for now.
-			return errResult("apply_yaml is not yet implemented. Use kubectl apply for complex manifests."), nil, nil
+			summaries, err := applyYAMLManifests(ctx, dynamicClient, restMapper, input.YAML)
+			if err != nil {
+				return errResult("failed to apply yaml: %v", err), nil, nil
+			}
+
+			return textResult(strings.Join(summaries, "\n")), nil, nil
 		})
 
 	}
@@ -1384,4 +1413,77 @@ func main() {
 		logger.Error("server error", "error", err)
 		os.Exit(1)
 	}
+}
+
+func applyYAMLManifests(ctx context.Context, client dynamic.Interface, mapper meta.RESTMapper, manifest string) ([]string, error) {
+	decoder := yaml.NewYAMLOrJSONDecoder(strings.NewReader(manifest), 4096)
+	force := true
+	var summaries []string
+
+	for {
+		obj := &unstructured.Unstructured{}
+		if err := decoder.Decode(obj); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+		if len(obj.Object) == 0 {
+			continue
+		}
+
+		gvk := obj.GroupVersionKind()
+		if gvk.Empty() {
+			return nil, fmt.Errorf("manifest is missing apiVersion or kind")
+		}
+		if obj.GetName() == "" {
+			return nil, fmt.Errorf("%s manifest is missing metadata.name", gvk.Kind)
+		}
+
+		mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+		if err != nil {
+			return nil, err
+		}
+
+		namespace := obj.GetNamespace()
+		var resource dynamic.ResourceInterface
+		if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
+			namespace = nsOrDefault(namespace)
+			obj.SetNamespace(namespace)
+			resource = client.Resource(mapping.Resource).Namespace(namespace)
+		} else {
+			resource = client.Resource(mapping.Resource)
+		}
+
+		payload, err := json.Marshal(obj.Object)
+		if err != nil {
+			return nil, err
+		}
+
+		if _, err := resource.Patch(ctx, obj.GetName(), types.ApplyPatchType, payload, metav1.PatchOptions{
+			FieldManager: "k8s-mcp-go",
+			Force:        &force,
+		}); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return nil, err
+			}
+			if _, createErr := resource.Create(ctx, obj, metav1.CreateOptions{
+				FieldManager: "k8s-mcp-go",
+			}); createErr != nil {
+				return nil, createErr
+			}
+		}
+
+		displayName := obj.GetName()
+		if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
+			displayName = namespace + "/" + displayName
+		}
+		summaries = append(summaries, fmt.Sprintf("%s %s applied", gvk.Kind, displayName))
+	}
+
+	if len(summaries) == 0 {
+		return nil, fmt.Errorf("no YAML documents found")
+	}
+
+	return summaries, nil
 }

@@ -1,14 +1,20 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic/fake"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
@@ -317,6 +323,52 @@ func TestResultText_Empty(t *testing.T) {
 	got := resultText(r)
 	if got != "" {
 		t.Errorf("resultText(empty) = %q, want %q", got, "")
+	}
+}
+
+func TestApplyYAMLManifests_AppliesMultiDocumentYAML(t *testing.T) {
+	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{{Group: "", Version: "v1"}})
+	mapper.Add(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}, meta.RESTScopeNamespace)
+
+	client := fake.NewSimpleDynamicClient(runtime.NewScheme())
+	input := `
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  key: value
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: explicit-config
+  namespace: tools
+data:
+  enabled: "true"
+`
+
+	summaries, err := applyYAMLManifests(context.Background(), client, mapper, input)
+	if err != nil {
+		t.Fatalf("applyYAMLManifests returned error: %v", err)
+	}
+
+	wantSummaries := []string{"ConfigMap default/app-config applied", "ConfigMap tools/explicit-config applied"}
+	if strings.Join(summaries, "\n") != strings.Join(wantSummaries, "\n") {
+		t.Fatalf("summaries = %v, want %v", summaries, wantSummaries)
+	}
+
+	defaultCM, err := client.Resource(schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}).Namespace("default").Get(context.Background(), "app-config", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("expected default/app-config to be applied: %v", err)
+	}
+	if got, _, _ := unstructured.NestedString(defaultCM.Object, "data", "key"); got != "value" {
+		t.Errorf("default/app-config data.key = %q, want %q", got, "value")
+	}
+
+	_, err = client.Resource(schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}).Namespace("tools").Get(context.Background(), "explicit-config", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("expected tools/explicit-config to be applied: %v", err)
 	}
 }
 
