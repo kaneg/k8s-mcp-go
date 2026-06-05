@@ -1,27 +1,70 @@
 # k8s-mcp-go
 
-**Safe Kubernetes access for AI agents.**
+**Safe, read-only-by-default Kubernetes access for AI agents.**
 
-You want AI to *look at* your cluster. You don't want it to *accidentally delete everything in production*. This MCP server lets you draw the line.
-
-```bash
-# AI can only read. No writes. No surprises.
-k8s-mcp-go
-```
+A Kubernetes MCP server that lets AI assistants inspect your cluster safely — without giving them unrestricted `kubectl`.
 
 ## Why
 
-Giving AI agents raw `kubectl` access is terrifying. There's nothing stopping it from running `kubectl delete ns production` when it's confused. And it *will* get confused eventually.
+Most AI agents can use Kubernetes tools.
+The real problem is **how to stop them from changing the wrong thing**.
 
-k8s-mcp-go sits between your AI and the cluster with a simple rule: **you decide what it can do**.
+Giving an AI raw `kubectl` access is risky. Even a capable model can:
+
+- delete the wrong resource
+- restart the wrong workload
+- apply a dangerous change
+- turn a debugging session into a production incident
+
+`k8s-mcp-go` gives AI agents a **guardrailed interface** to Kubernetes instead of unrestricted shell access.
+
+It is built for the real-world question:
+
+> How can I let AI help with Kubernetes, without letting it break my cluster?
+
+## Permission Modes
+
+You choose the boundary up front:
 
 | What you want | Mode |
 |---------------|------|
-| "Let AI explore and diagnose, but don't touch anything" | `--mode=readonly` (default) |
-| "OK, it can scale and restart deployments" | `--mode=readwrite` |
-| "Full access, I know what I'm doing" | `--mode=dangerous` |
+| "Let AI inspect and diagnose, but change nothing" | `readonly` |
+| "Allow safe operational actions like scale and restart" | `readwrite` |
+| "Give it full cluster power" | `dangerous` |
 
-That's it. Default is readonly. Everything else is opt-in.
+### `readonly` (default)
+For diagnosis, inspection, and safe exploration.
+
+AI can do things like:
+- list pods, deployments, services, nodes, and namespaces
+- read logs and events
+- inspect cluster state
+- check resource usage
+
+It **cannot** modify workloads or delete resources.
+
+### `readwrite`
+For controlled operational workflows.
+
+AI can do things like:
+- scale deployments
+- restart deployments
+- restart statefulsets
+- update images
+- patch deployments
+- create namespaces
+
+It still cannot perform the most destructive operations.
+
+### `dangerous`
+Full access.
+
+Use this only when you explicitly want AI to be able to:
+- delete resources
+- delete namespaces
+- apply arbitrary YAML
+
+If you are unsure, use `readonly`.
 
 ## Quick Start
 
@@ -40,7 +83,7 @@ Download the `.mcpb` bundle for your platform from [Releases](https://github.com
 
 ### Option 2: Manual Binary Install
 
-Grab the binary archive from [Releases](https://github.com/kaneg/k8s-mcp-go/releases/latest) and extract:
+Grab the binary archive from [Releases](https://github.com/kaneg/k8s-mcp-go/releases/latest) and extract it:
 
 ```bash
 # Example: Linux x86_64
@@ -49,7 +92,7 @@ chmod +x k8s-mcp-go
 sudo mv k8s-mcp-go /usr/local/bin/
 ```
 
-Then add to your MCP client:
+Then add it to your MCP client.
 
 **Claude Desktop** (`claude_desktop_config.json`):
 
@@ -79,22 +122,29 @@ Then add to your MCP client:
 
 Restart your client and start asking questions about your cluster.
 
-## Permission Modes
+## Why not just use kubectl?
 
-| Mode | Flag | AI can... |
-|------|------|-----------|
-| 🔵 **readonly** | `-mode=readonly` (default) | View everything, change nothing |
-| 🟡 **readwrite** | `-mode=readwrite` | Scale, restart, update images |
-| 🔴 **dangerous** | `-mode=dangerous` | Delete resources, apply arbitrary YAML |
+Because the problem is not whether AI can talk to Kubernetes.
+The problem is whether it can do so **safely**.
 
-Each tool checks permissions at runtime. If AI tries something outside its mode, it gets a clear "permission denied" error — not a silent failure.
+`kubectl` is powerful, but it does not give you a product-level permission mode for AI behavior.
+With `k8s-mcp-go`, you decide whether the assistant can:
 
-## Tools (33 total)
+- inspect only
+- perform limited operational actions
+- or get full control
 
-### 🔍 Readonly (22 tools)
+**The permission boundary is the product.**
+
+## Available Tools (34 total)
+
+Tools are grouped by permission level.
+
+### Readonly (23)
 
 | Tool | Description |
 |------|-------------|
+| `server_info` | Show server version, mode, kubeconfig path, and runtime details |
 | `list_pods` | List pods in a namespace |
 | `get_pod` | Get pod details |
 | `get_pod_logs` | Get pod logs |
@@ -118,7 +168,7 @@ Each tool checks permissions at runtime. If AI tries something outside its mode,
 | `cluster_overview` | Cluster health summary |
 | `get_events` | List events |
 
-### ✏️ Readwrite (+7 tools)
+### Readwrite (7)
 
 | Tool | Description |
 |------|-------------|
@@ -130,13 +180,13 @@ Each tool checks permissions at runtime. If AI tries something outside its mode,
 | `create_namespace` | Create a new namespace |
 | `patch_deployment` | Apply strategic merge patch |
 
-### ⚠️ Dangerous (+4 tools)
+### Dangerous (4)
 
 | Tool | Description |
 |------|-------------|
 | `delete_pod` | Delete a pod |
 | `delete_deployment` | Delete a deployment |
-| `delete_namespace` | Delete namespace + ALL resources |
+| `delete_namespace` | Delete a namespace and all resources |
 | `apply_yaml` | Apply arbitrary YAML manifest |
 
 ## Environment Variables
