@@ -7,8 +7,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
@@ -107,6 +107,28 @@ func TestPermDeniedResult(t *testing.T) {
 	}
 }
 
+func TestFormatServerInfo_IncludesOperationalDetails(t *testing.T) {
+	got := formatServerInfo("readwrite", "/tmp/kubeconfig", "dev", "dev-cluster", "dev-user", "https://dev.example.com")
+
+	for _, want := range []string{
+		"Name: k8s-mcp-go",
+		"Version: ",
+		"Mode: readwrite",
+		"Kubeconfig: /tmp/kubeconfig",
+		"Current Context: dev",
+		"Cluster: dev-cluster",
+		"User: dev-user",
+		"API Server: https://dev.example.com",
+		"OS: ",
+		"Arch: ",
+		"Go: ",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("formatServerInfo() missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 // ==================== checkPermission ====================
 
 func TestCheckPermission_ReadOnlyMode(t *testing.T) {
@@ -157,6 +179,31 @@ func TestCheckPermission_DangerousMode(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("checkPermission(dangerous, %s) = %v, want %v", tt.required, got, tt.want)
 		}
+	}
+}
+
+func TestShouldRegisterTool_FiltersByMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     string
+		required string
+		want     bool
+	}{
+		{"readonly tool in readonly mode", ModeReadOnly, ModeReadOnly, true},
+		{"readwrite tool hidden in readonly mode", ModeReadOnly, ModeReadWrite, false},
+		{"dangerous tool hidden in readonly mode", ModeReadOnly, ModeDangerous, false},
+		{"readwrite tool in readwrite mode", ModeReadWrite, ModeReadWrite, true},
+		{"dangerous tool hidden in readwrite mode", ModeReadWrite, ModeDangerous, false},
+		{"dangerous tool in dangerous mode", ModeDangerous, ModeDangerous, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldRegisterTool(tt.mode, tt.required)
+			if got != tt.want {
+				t.Errorf("shouldRegisterTool(%q, %q) = %v, want %v", tt.mode, tt.required, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -230,7 +277,7 @@ func TestSortEventsByTime_MixedTimestamps(t *testing.T) {
 func TestToolDescriptions_HavePermissionPrefix(t *testing.T) {
 	// This is a static check - we verify the expected tool list has correct prefixes
 	readonlyTools := []string{
-		"list_pods", "get_pod", "get_pod_logs", "list_services", "get_service",
+		"server_info", "list_pods", "get_pod", "get_pod_logs", "list_services", "get_service",
 		"list_deployments", "get_deployment", "list_statefulsets", "get_statefulset",
 		"list_namespaces", "list_nodes", "cluster_overview", "get_events",
 		"list_configmaps", "get_configmap", "list_secrets", "get_secret", "top_nodes",
@@ -250,8 +297,8 @@ func TestToolDescriptions_HavePermissionPrefix(t *testing.T) {
 
 	// Count total expected tools
 	total := len(readonlyTools) + len(readwriteTools) + len(dangerousTools)
-	if total != 33 {
-		t.Errorf("expected 33 tools total, got %d", total)
+	if total != 34 {
+		t.Errorf("expected 34 tools total, got %d", total)
 	}
 }
 

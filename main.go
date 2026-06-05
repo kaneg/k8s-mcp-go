@@ -66,15 +66,15 @@ type ScaleInput struct {
 }
 
 type SetImageInput struct {
-	Name       string `json:"name" jsonschema:"Deployment name"`
-	Namespace  string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
-	Container  string `json:"container" jsonschema:"Container name"`
-	Image      string `json:"image" jsonschema:"New container image (e.g. nginx:1.25)"`
+	Name      string `json:"name" jsonschema:"Deployment name"`
+	Namespace string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
+	Container string `json:"container" jsonschema:"Container name"`
+	Image     string `json:"image" jsonschema:"New container image (e.g. nginx:1.25)"`
 }
 
 type DeletePodInput struct {
-	Name      string `json:"name" jsonschema:"Pod name"`
-	Namespace string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
+	Name        string `json:"name" jsonschema:"Pod name"`
+	Namespace   string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
 	GracePeriod *int64 `json:"grace_period,omitempty" jsonschema:"Grace period in seconds (default: 30)"`
 }
 
@@ -95,9 +95,9 @@ type ConfigMapInput struct {
 }
 
 type SecretInput struct {
-	Name      string `json:"name" jsonschema:"Secret name"`
-	Namespace string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
-	ShowValues bool  `json:"show_values,omitempty" jsonschema:"Show secret values (requires dangerous mode, default: false)"`
+	Name       string `json:"name" jsonschema:"Secret name"`
+	Namespace  string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
+	ShowValues bool   `json:"show_values,omitempty" jsonschema:"Show secret values (requires dangerous mode, default: false)"`
 }
 
 type IngressInput struct {
@@ -169,6 +169,30 @@ func main() {
 		os.Exit(1)
 	}
 
+	loadingRules := &clientcmd.ClientConfigLoadingRules{}
+	kubeconfigPaths := filepath.SplitList(kubeconfig)
+	if len(kubeconfigPaths) > 1 {
+		loadingRules.Precedence = kubeconfigPaths
+	} else {
+		loadingRules.ExplicitPath = kubeconfig
+	}
+	rawConfig, err := loadingRules.Load()
+	if err != nil {
+		logger.Error("failed to inspect kubeconfig", "path", kubeconfig, "error", err)
+		os.Exit(1)
+	}
+	currentContext := rawConfig.CurrentContext
+	clusterName := ""
+	userName := ""
+	apiServer := ""
+	if ctx, ok := rawConfig.Contexts[currentContext]; ok {
+		clusterName = ctx.Cluster
+		userName = ctx.AuthInfo
+	}
+	if cluster, ok := rawConfig.Clusters[clusterName]; ok {
+		apiServer = cluster.Server
+	}
+
 	k8s, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		logger.Error("failed to create kubernetes client", "error", err)
@@ -191,6 +215,13 @@ func main() {
 		Name:    "k8s-mcp-go",
 		Version: version,
 	}, nil)
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "server_info",
+		Description: "[READONLY] Show MCP server version, mode, kubeconfig path, and runtime details",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input EmptyInput) (*mcp.CallToolResult, any, error) {
+		return textResult(formatServerInfo(*mode, kubeconfig, currentContext, clusterName, userName, apiServer)), nil, nil
+	})
 
 	// Mode check helpers
 	requireReadWrite := func(tool string) bool {
@@ -1081,264 +1112,272 @@ func main() {
 
 	// ==================== READWRITE TOOLS ====================
 
-	// restart_deployment
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "restart_deployment",
-		Description: "[READWRITE] Restart a deployment (kubectl rollout restart). Triggers rolling update.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input RolloutInput) (*mcp.CallToolResult, any, error) {
-		if !requireReadWrite("restart_deployment") {
-			return permDeniedResult("restart_deployment", ModeReadWrite), nil, nil
-		}
-		if input.Name == "" {
-			return errResult("name is required"), nil, nil
-		}
-		ns := nsOrDefault(input.Namespace)
+	if shouldRegisterTool(*mode, ModeReadWrite) {
 
-		patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"%s"}}}}}`, time.Now().Format(time.RFC3339))
-		_, err := k8s.AppsV1().Deployments(ns).Patch(ctx, input.Name, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
-		if err != nil {
-			return errResult("failed to restart deployment: %v", err), nil, nil
-		}
-
-		return textResult(fmt.Sprintf("Deployment %s/%s restarted successfully. Use rollout_status to monitor progress.", ns, input.Name)), nil, nil
-	})
-
-	// restart_statefulset
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "restart_statefulset",
-		Description: "[READWRITE] Restart a statefulset (kubectl rollout restart). Triggers rolling update.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input RolloutInput) (*mcp.CallToolResult, any, error) {
-		if !requireReadWrite("restart_statefulset") {
-			return permDeniedResult("restart_statefulset", ModeReadWrite), nil, nil
-		}
-		if input.Name == "" {
-			return errResult("name is required"), nil, nil
-		}
-		ns := nsOrDefault(input.Namespace)
-
-		patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"%s"}}}}}`, time.Now().Format(time.RFC3339))
-		_, err := k8s.AppsV1().StatefulSets(ns).Patch(ctx, input.Name, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
-		if err != nil {
-			return errResult("failed to restart statefulset: %v", err), nil, nil
-		}
-
-		return textResult(fmt.Sprintf("StatefulSet %s/%s restarted successfully. Use rollout_status to monitor progress.", ns, input.Name)), nil, nil
-	})
-
-	// scale_deployment
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "scale_deployment",
-		Description: "[READWRITE] Scale a deployment to specified number of replicas",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input ScaleInput) (*mcp.CallToolResult, any, error) {
-		if !requireReadWrite("scale_deployment") {
-			return permDeniedResult("scale_deployment", ModeReadWrite), nil, nil
-		}
-		if input.Name == "" {
-			return errResult("name is required"), nil, nil
-		}
-		ns := nsOrDefault(input.Namespace)
-
-		patch := fmt.Sprintf(`{"spec":{"replicas":%d}}`, input.Replicas)
-		_, err := k8s.AppsV1().Deployments(ns).Patch(ctx, input.Name, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
-		if err != nil {
-			return errResult("failed to scale deployment: %v", err), nil, nil
-		}
-
-		return textResult(fmt.Sprintf("Deployment %s/%s scaled to %d replicas.", ns, input.Name, input.Replicas)), nil, nil
-	})
-
-	// set_image
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "set_image",
-		Description: "[READWRITE] Update container image in a deployment",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input SetImageInput) (*mcp.CallToolResult, any, error) {
-		if !requireReadWrite("set_image") {
-			return permDeniedResult("set_image", ModeReadWrite), nil, nil
-		}
-		if input.Name == "" || input.Container == "" || input.Image == "" {
-			return errResult("name, container, and image are all required"), nil, nil
-		}
-		ns := nsOrDefault(input.Namespace)
-
-		patch := fmt.Sprintf(`{"spec":{"template":{"spec":{"containers":[{"name":"%s","image":"%s"}]}}}}`, input.Container, input.Image)
-		_, err := k8s.AppsV1().Deployments(ns).Patch(ctx, input.Name, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
-		if err != nil {
-			return errResult("failed to set image: %v", err), nil, nil
-		}
-
-		return textResult(fmt.Sprintf("Deployment %s/%s container '%s' image updated to '%s'.", ns, input.Name, input.Container, input.Image)), nil, nil
-	})
-
-	// rollout_status
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "rollout_status",
-		Description: "[READWRITE] Check rollout status of a deployment",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input RolloutInput) (*mcp.CallToolResult, any, error) {
-		if !requireReadWrite("rollout_status") {
-			return permDeniedResult("rollout_status", ModeReadWrite), nil, nil
-		}
-		if input.Name == "" {
-			return errResult("name is required"), nil, nil
-		}
-		ns := nsOrDefault(input.Namespace)
-
-		d, err := k8s.AppsV1().Deployments(ns).Get(ctx, input.Name, metav1.GetOptions{})
-		if err != nil {
-			return errResult("failed to get deployment: %v", err), nil, nil
-		}
-
-		var desired int32
-		if d.Spec.Replicas != nil {
-			desired = *d.Spec.Replicas
-		}
-
-		var lines []string
-		lines = append(lines, fmt.Sprintf("Deployment: %s/%s", ns, d.Name))
-		lines = append(lines, fmt.Sprintf("Desired: %d | Updated: %d | Ready: %d | Available: %d",
-			desired, d.Status.UpdatedReplicas, d.Status.ReadyReplicas, d.Status.AvailableReplicas))
-
-		if d.Status.ReadyReplicas == desired && d.Status.UpdatedReplicas == desired {
-			lines = append(lines, "\n✅ Rollout complete!")
-		} else {
-			lines = append(lines, "\n⏳ Rollout in progress...")
-			for _, cond := range d.Status.Conditions {
-				lines = append(lines, fmt.Sprintf("  %s: %s - %s", cond.Type, cond.Status, cond.Message))
+		// restart_deployment
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "restart_deployment",
+			Description: "[READWRITE] Restart a deployment (kubectl rollout restart). Triggers rolling update.",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input RolloutInput) (*mcp.CallToolResult, any, error) {
+			if !requireReadWrite("restart_deployment") {
+				return permDeniedResult("restart_deployment", ModeReadWrite), nil, nil
 			}
-		}
+			if input.Name == "" {
+				return errResult("name is required"), nil, nil
+			}
+			ns := nsOrDefault(input.Namespace)
 
-		return textResult(strings.Join(lines, "\n")), nil, nil
-	})
+			patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"%s"}}}}}`, time.Now().Format(time.RFC3339))
+			_, err := k8s.AppsV1().Deployments(ns).Patch(ctx, input.Name, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
+			if err != nil {
+				return errResult("failed to restart deployment: %v", err), nil, nil
+			}
 
-	// create_namespace
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "create_namespace",
-		Description: "[READWRITE] Create a new namespace",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespaceInput) (*mcp.CallToolResult, any, error) {
-		if !requireReadWrite("create_namespace") {
-			return permDeniedResult("create_namespace", ModeReadWrite), nil, nil
-		}
-		if input.Namespace == "" {
-			return errResult("namespace is required"), nil, nil
-		}
-
-		_, err := k8s.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{Name: input.Namespace},
-		}, metav1.CreateOptions{})
-		if err != nil {
-			return errResult("failed to create namespace: %v", err), nil, nil
-		}
-
-		return textResult(fmt.Sprintf("Namespace '%s' created successfully.", input.Namespace)), nil, nil
-	})
-
-	// patch_deployment
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "patch_deployment",
-		Description: "[READWRITE] Apply a strategic merge patch to a deployment",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input PatchInput) (*mcp.CallToolResult, any, error) {
-		if !requireReadWrite("patch_deployment") {
-			return permDeniedResult("patch_deployment", ModeReadWrite), nil, nil
-		}
-		if input.Name == "" || input.Patch == "" {
-			return errResult("name and patch are required"), nil, nil
-		}
-		ns := nsOrDefault(input.Namespace)
-
-		_, err := k8s.AppsV1().Deployments(ns).Patch(ctx, input.Name, types.StrategicMergePatchType, []byte(input.Patch), metav1.PatchOptions{})
-		if err != nil {
-			return errResult("failed to patch deployment: %v", err), nil, nil
-		}
-
-		return textResult(fmt.Sprintf("Deployment %s/%s patched successfully.", ns, input.Name)), nil, nil
-	})
-
-	// ==================== DANGEROUS TOOLS ====================
-
-	// delete_pod
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "delete_pod",
-		Description: "[DANGEROUS] Delete a pod. Use with caution!",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input DeletePodInput) (*mcp.CallToolResult, any, error) {
-		if !requireDangerous("delete_pod") {
-			return permDeniedResult("delete_pod", ModeDangerous), nil, nil
-		}
-		if input.Name == "" {
-			return errResult("name is required"), nil, nil
-		}
-		ns := nsOrDefault(input.Namespace)
-
-		gracePeriod := int64(30)
-		if input.GracePeriod != nil {
-			gracePeriod = *input.GracePeriod
-		}
-
-		err := k8s.CoreV1().Pods(ns).Delete(ctx, input.Name, metav1.DeleteOptions{
-			GracePeriodSeconds: &gracePeriod,
+			return textResult(fmt.Sprintf("Deployment %s/%s restarted successfully. Use rollout_status to monitor progress.", ns, input.Name)), nil, nil
 		})
-		if err != nil {
-			return errResult("failed to delete pod: %v", err), nil, nil
-		}
 
-		return textResult(fmt.Sprintf("Pod %s/%s deleted (grace period: %ds).", ns, input.Name, gracePeriod)), nil, nil
-	})
+		// restart_statefulset
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "restart_statefulset",
+			Description: "[READWRITE] Restart a statefulset (kubectl rollout restart). Triggers rolling update.",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input RolloutInput) (*mcp.CallToolResult, any, error) {
+			if !requireReadWrite("restart_statefulset") {
+				return permDeniedResult("restart_statefulset", ModeReadWrite), nil, nil
+			}
+			if input.Name == "" {
+				return errResult("name is required"), nil, nil
+			}
+			ns := nsOrDefault(input.Namespace)
 
-	// delete_namespace
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "delete_namespace",
-		Description: "[DANGEROUS] Delete a namespace and ALL resources within it!",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespaceInput) (*mcp.CallToolResult, any, error) {
-		if !requireDangerous("delete_namespace") {
-			return permDeniedResult("delete_namespace", ModeDangerous), nil, nil
-		}
-		if input.Namespace == "" {
-			return errResult("namespace is required"), nil, nil
-		}
+			patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"%s"}}}}}`, time.Now().Format(time.RFC3339))
+			_, err := k8s.AppsV1().StatefulSets(ns).Patch(ctx, input.Name, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
+			if err != nil {
+				return errResult("failed to restart statefulset: %v", err), nil, nil
+			}
 
-		err := k8s.CoreV1().Namespaces().Delete(ctx, input.Namespace, metav1.DeleteOptions{})
-		if err != nil {
-			return errResult("failed to delete namespace: %v", err), nil, nil
-		}
+			return textResult(fmt.Sprintf("StatefulSet %s/%s restarted successfully. Use rollout_status to monitor progress.", ns, input.Name)), nil, nil
+		})
 
-		return textResult(fmt.Sprintf("⚠️ Namespace '%s' and ALL its resources are being deleted!", input.Namespace)), nil, nil
-	})
+		// scale_deployment
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "scale_deployment",
+			Description: "[READWRITE] Scale a deployment to specified number of replicas",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input ScaleInput) (*mcp.CallToolResult, any, error) {
+			if !requireReadWrite("scale_deployment") {
+				return permDeniedResult("scale_deployment", ModeReadWrite), nil, nil
+			}
+			if input.Name == "" {
+				return errResult("name is required"), nil, nil
+			}
+			ns := nsOrDefault(input.Namespace)
 
-	// delete_deployment
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "delete_deployment",
-		Description: "[DANGEROUS] Delete a deployment and its pods",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input DeploymentInput) (*mcp.CallToolResult, any, error) {
-		if !requireDangerous("delete_deployment") {
-			return permDeniedResult("delete_deployment", ModeDangerous), nil, nil
-		}
-		if input.Name == "" {
-			return errResult("name is required"), nil, nil
-		}
-		ns := nsOrDefault(input.Namespace)
+			patch := fmt.Sprintf(`{"spec":{"replicas":%d}}`, input.Replicas)
+			_, err := k8s.AppsV1().Deployments(ns).Patch(ctx, input.Name, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
+			if err != nil {
+				return errResult("failed to scale deployment: %v", err), nil, nil
+			}
 
-		err := k8s.AppsV1().Deployments(ns).Delete(ctx, input.Name, metav1.DeleteOptions{})
-		if err != nil {
-			return errResult("failed to delete deployment: %v", err), nil, nil
-		}
+			return textResult(fmt.Sprintf("Deployment %s/%s scaled to %d replicas.", ns, input.Name, input.Replicas)), nil, nil
+		})
 
-		return textResult(fmt.Sprintf("⚠️ Deployment %s/%s deleted.", ns, input.Name)), nil, nil
-	})
+		// set_image
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "set_image",
+			Description: "[READWRITE] Update container image in a deployment",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input SetImageInput) (*mcp.CallToolResult, any, error) {
+			if !requireReadWrite("set_image") {
+				return permDeniedResult("set_image", ModeReadWrite), nil, nil
+			}
+			if input.Name == "" || input.Container == "" || input.Image == "" {
+				return errResult("name, container, and image are all required"), nil, nil
+			}
+			ns := nsOrDefault(input.Namespace)
 
-	// apply_yaml
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "apply_yaml",
-		Description: "[DANGEROUS] Apply arbitrary YAML manifest. Handles single or multi-document YAML.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input ApplyYAMLInput) (*mcp.CallToolResult, any, error) {
-		if !requireDangerous("apply_yaml") {
-			return permDeniedResult("apply_yaml", ModeDangerous), nil, nil
-		}
-		if input.YAML == "" {
-			return errResult("yaml content is required"), nil, nil
-		}
+			patch := fmt.Sprintf(`{"spec":{"template":{"spec":{"containers":[{"name":"%s","image":"%s"}]}}}}`, input.Container, input.Image)
+			_, err := k8s.AppsV1().Deployments(ns).Patch(ctx, input.Name, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
+			if err != nil {
+				return errResult("failed to set image: %v", err), nil, nil
+			}
 
-		// Note: Full YAML apply would require kubectl runtime or dynamic client.
-		// For safety, we return an error suggesting kubectl for now.
-		return errResult("apply_yaml is not yet implemented. Use kubectl apply for complex manifests."), nil, nil
-	})
+			return textResult(fmt.Sprintf("Deployment %s/%s container '%s' image updated to '%s'.", ns, input.Name, input.Container, input.Image)), nil, nil
+		})
+
+		// rollout_status
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "rollout_status",
+			Description: "[READWRITE] Check rollout status of a deployment",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input RolloutInput) (*mcp.CallToolResult, any, error) {
+			if !requireReadWrite("rollout_status") {
+				return permDeniedResult("rollout_status", ModeReadWrite), nil, nil
+			}
+			if input.Name == "" {
+				return errResult("name is required"), nil, nil
+			}
+			ns := nsOrDefault(input.Namespace)
+
+			d, err := k8s.AppsV1().Deployments(ns).Get(ctx, input.Name, metav1.GetOptions{})
+			if err != nil {
+				return errResult("failed to get deployment: %v", err), nil, nil
+			}
+
+			var desired int32
+			if d.Spec.Replicas != nil {
+				desired = *d.Spec.Replicas
+			}
+
+			var lines []string
+			lines = append(lines, fmt.Sprintf("Deployment: %s/%s", ns, d.Name))
+			lines = append(lines, fmt.Sprintf("Desired: %d | Updated: %d | Ready: %d | Available: %d",
+				desired, d.Status.UpdatedReplicas, d.Status.ReadyReplicas, d.Status.AvailableReplicas))
+
+			if d.Status.ReadyReplicas == desired && d.Status.UpdatedReplicas == desired {
+				lines = append(lines, "\n✅ Rollout complete!")
+			} else {
+				lines = append(lines, "\n⏳ Rollout in progress...")
+				for _, cond := range d.Status.Conditions {
+					lines = append(lines, fmt.Sprintf("  %s: %s - %s", cond.Type, cond.Status, cond.Message))
+				}
+			}
+
+			return textResult(strings.Join(lines, "\n")), nil, nil
+		})
+
+		// create_namespace
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "create_namespace",
+			Description: "[READWRITE] Create a new namespace",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespaceInput) (*mcp.CallToolResult, any, error) {
+			if !requireReadWrite("create_namespace") {
+				return permDeniedResult("create_namespace", ModeReadWrite), nil, nil
+			}
+			if input.Namespace == "" {
+				return errResult("namespace is required"), nil, nil
+			}
+
+			_, err := k8s.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: input.Namespace},
+			}, metav1.CreateOptions{})
+			if err != nil {
+				return errResult("failed to create namespace: %v", err), nil, nil
+			}
+
+			return textResult(fmt.Sprintf("Namespace '%s' created successfully.", input.Namespace)), nil, nil
+		})
+
+		// patch_deployment
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "patch_deployment",
+			Description: "[READWRITE] Apply a strategic merge patch to a deployment",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input PatchInput) (*mcp.CallToolResult, any, error) {
+			if !requireReadWrite("patch_deployment") {
+				return permDeniedResult("patch_deployment", ModeReadWrite), nil, nil
+			}
+			if input.Name == "" || input.Patch == "" {
+				return errResult("name and patch are required"), nil, nil
+			}
+			ns := nsOrDefault(input.Namespace)
+
+			_, err := k8s.AppsV1().Deployments(ns).Patch(ctx, input.Name, types.StrategicMergePatchType, []byte(input.Patch), metav1.PatchOptions{})
+			if err != nil {
+				return errResult("failed to patch deployment: %v", err), nil, nil
+			}
+
+			return textResult(fmt.Sprintf("Deployment %s/%s patched successfully.", ns, input.Name)), nil, nil
+		})
+
+		// ==================== DANGEROUS TOOLS ====================
+
+	}
+
+	if shouldRegisterTool(*mode, ModeDangerous) {
+
+		// delete_pod
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "delete_pod",
+			Description: "[DANGEROUS] Delete a pod. Use with caution!",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input DeletePodInput) (*mcp.CallToolResult, any, error) {
+			if !requireDangerous("delete_pod") {
+				return permDeniedResult("delete_pod", ModeDangerous), nil, nil
+			}
+			if input.Name == "" {
+				return errResult("name is required"), nil, nil
+			}
+			ns := nsOrDefault(input.Namespace)
+
+			gracePeriod := int64(30)
+			if input.GracePeriod != nil {
+				gracePeriod = *input.GracePeriod
+			}
+
+			err := k8s.CoreV1().Pods(ns).Delete(ctx, input.Name, metav1.DeleteOptions{
+				GracePeriodSeconds: &gracePeriod,
+			})
+			if err != nil {
+				return errResult("failed to delete pod: %v", err), nil, nil
+			}
+
+			return textResult(fmt.Sprintf("Pod %s/%s deleted (grace period: %ds).", ns, input.Name, gracePeriod)), nil, nil
+		})
+
+		// delete_namespace
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "delete_namespace",
+			Description: "[DANGEROUS] Delete a namespace and ALL resources within it!",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespaceInput) (*mcp.CallToolResult, any, error) {
+			if !requireDangerous("delete_namespace") {
+				return permDeniedResult("delete_namespace", ModeDangerous), nil, nil
+			}
+			if input.Namespace == "" {
+				return errResult("namespace is required"), nil, nil
+			}
+
+			err := k8s.CoreV1().Namespaces().Delete(ctx, input.Namespace, metav1.DeleteOptions{})
+			if err != nil {
+				return errResult("failed to delete namespace: %v", err), nil, nil
+			}
+
+			return textResult(fmt.Sprintf("⚠️ Namespace '%s' and ALL its resources are being deleted!", input.Namespace)), nil, nil
+		})
+
+		// delete_deployment
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "delete_deployment",
+			Description: "[DANGEROUS] Delete a deployment and its pods",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input DeploymentInput) (*mcp.CallToolResult, any, error) {
+			if !requireDangerous("delete_deployment") {
+				return permDeniedResult("delete_deployment", ModeDangerous), nil, nil
+			}
+			if input.Name == "" {
+				return errResult("name is required"), nil, nil
+			}
+			ns := nsOrDefault(input.Namespace)
+
+			err := k8s.AppsV1().Deployments(ns).Delete(ctx, input.Name, metav1.DeleteOptions{})
+			if err != nil {
+				return errResult("failed to delete deployment: %v", err), nil, nil
+			}
+
+			return textResult(fmt.Sprintf("⚠️ Deployment %s/%s deleted.", ns, input.Name)), nil, nil
+		})
+
+		// apply_yaml
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "apply_yaml",
+			Description: "[DANGEROUS] Apply arbitrary YAML manifest. Handles single or multi-document YAML.",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input ApplyYAMLInput) (*mcp.CallToolResult, any, error) {
+			if !requireDangerous("apply_yaml") {
+				return permDeniedResult("apply_yaml", ModeDangerous), nil, nil
+			}
+			if input.YAML == "" {
+				return errResult("yaml content is required"), nil, nil
+			}
+
+			// Note: Full YAML apply would require kubectl runtime or dynamic client.
+			// For safety, we return an error suggesting kubectl for now.
+			return errResult("apply_yaml is not yet implemented. Use kubectl apply for complex manifests."), nil, nil
+		})
+
+	}
 
 	ctx := context.Background()
 	if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil {
@@ -1346,4 +1385,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-

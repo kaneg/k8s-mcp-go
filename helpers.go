@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"strings"
 	"time"
 
@@ -53,6 +54,31 @@ func permDeniedResult(tool, required string) *mcp.CallToolResult {
 	return errResult("permission denied: tool '%s' requires '%s' mode. Restart with --mode=%s", tool, required, required)
 }
 
+func formatServerInfo(mode, kubeconfig, currentContext, cluster, user, server string) string {
+	return fmt.Sprintf(`Name: k8s-mcp-go
+Version: %s
+Mode: %s
+Kubeconfig: %s
+Current Context: %s
+Cluster: %s
+User: %s
+API Server: %s
+OS: %s
+Arch: %s
+Go: %s`,
+		version,
+		mode,
+		kubeconfig,
+		currentContext,
+		cluster,
+		user,
+		server,
+		runtime.GOOS,
+		runtime.GOARCH,
+		runtime.Version(),
+	)
+}
+
 // checkPermission checks if a tool is allowed in the given mode.
 // Returns true if allowed, false if denied.
 func checkPermission(currentMode, requiredMode string) bool {
@@ -62,6 +88,10 @@ func checkPermission(currentMode, requiredMode string) bool {
 		ModeDangerous: 2,
 	}
 	return modeRank[currentMode] >= modeRank[requiredMode]
+}
+
+func shouldRegisterTool(currentMode, requiredMode string) bool {
+	return checkPermission(currentMode, requiredMode)
 }
 
 func sortEventsByTime(events []corev1.Event) {
