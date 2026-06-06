@@ -45,9 +45,19 @@ type NamespaceInput struct {
 	Namespace string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
 }
 
+type NamespacedListInput struct {
+	Namespace     string `json:"namespace,omitempty" jsonschema:"Kubernetes namespace (default: default; use * for all namespaces)"`
+	AllNamespaces bool   `json:"all_namespaces,omitempty" jsonschema:"List across all namespaces (default: false)"`
+}
+
 type PodInput struct {
 	Name      string `json:"name" jsonschema:"Pod name"`
 	Namespace string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
+}
+
+type ResolveWorkloadInput struct {
+	Name      string `json:"name" jsonschema:"Application, workload, service, or pod name to resolve"`
+	Namespace string `json:"namespace,omitempty" jsonschema:"Kubernetes namespace (default: default)"`
 }
 
 type LogsInput struct {
@@ -101,6 +111,8 @@ type ApplyYAMLInput struct {
 type ConfigMapInput struct {
 	Name      string `json:"name" jsonschema:"ConfigMap name"`
 	Namespace string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
+	Full      bool   `json:"full,omitempty" jsonschema:"Return full ConfigMap values without truncation (default: false)"`
+	Output    string `json:"output,omitempty" jsonschema:"Output format: summary (default), json, or yaml"`
 }
 
 type SecretInput struct {
@@ -248,21 +260,84 @@ func main() {
 
 	// ==================== READ-ONLY TOOLS ====================
 
+	// resolve_workload
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "resolve_workload",
+		Description: "[READONLY] Resolve an application/workload name to matching Pod, Service, Deployment, and StatefulSet resources, with suggested next tools",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input ResolveWorkloadInput) (*mcp.CallToolResult, any, error) {
+		if input.Name == "" {
+			return errResult("name is required"), nil, nil
+		}
+		ns := nsOrDefault(input.Namespace)
+
+		var matches []WorkloadMatch
+		addMatch := func(kind, namespace, name, tool string) {
+			for _, existing := range matches {
+				if existing.Kind == kind && existing.Namespace == namespace && existing.Name == name {
+					return
+				}
+			}
+			matches = append(matches, WorkloadMatch{Kind: kind, Namespace: namespace, Name: name, SuggestedTool: tool})
+		}
+
+		if pod, err := k8s.CoreV1().Pods(ns).Get(ctx, input.Name, metav1.GetOptions{}); err == nil {
+			addMatch("Pod", pod.Namespace, pod.Name, "get_pod")
+		} else if !apierrors.IsNotFound(err) {
+			return errResult("failed to resolve pod: %v", err), nil, nil
+		}
+
+		if svc, err := k8s.CoreV1().Services(ns).Get(ctx, input.Name, metav1.GetOptions{}); err == nil {
+			addMatch("Service", svc.Namespace, svc.Name, "get_service")
+		} else if !apierrors.IsNotFound(err) {
+			return errResult("failed to resolve service: %v", err), nil, nil
+		}
+
+		if deploy, err := k8s.AppsV1().Deployments(ns).Get(ctx, input.Name, metav1.GetOptions{}); err == nil {
+			addMatch("Deployment", deploy.Namespace, deploy.Name, "get_deployment")
+		} else if !apierrors.IsNotFound(err) {
+			return errResult("failed to resolve deployment: %v", err), nil, nil
+		}
+
+		if sts, err := k8s.AppsV1().StatefulSets(ns).Get(ctx, input.Name, metav1.GetOptions{}); err == nil {
+			addMatch("StatefulSet", sts.Namespace, sts.Name, "get_statefulset")
+		} else if !apierrors.IsNotFound(err) {
+			return errResult("failed to resolve statefulset: %v", err), nil, nil
+		}
+
+		pods, err := k8s.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return errResult("failed to resolve related pods: %v", err), nil, nil
+		}
+		for _, pod := range pods.Items {
+			if pod.Name == input.Name || strings.HasPrefix(pod.Name, input.Name+"-") {
+				addMatch("Pod", pod.Namespace, pod.Name, "get_pod")
+			}
+		}
+
+		sort.Slice(matches, func(i, j int) bool {
+			left := matches[i].Kind + "/" + matches[i].Namespace + "/" + matches[i].Name
+			right := matches[j].Kind + "/" + matches[j].Namespace + "/" + matches[j].Name
+			return left < right
+		})
+
+		return textResult(formatResolvedWorkload(ns, input.Name, matches)), nil, nil
+	})
+
 	// list_pods
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_pods",
-		Description: "[READONLY] List all pods in a namespace with status, readiness, restarts, and age",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespaceInput) (*mcp.CallToolResult, any, error) {
-		ns := nsOrDefault(input.Namespace)
+		Description: "[READONLY] List pods with status, readiness, restarts, and age. Use all_namespaces=true to list across all namespaces.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespacedListInput) (*mcp.CallToolResult, any, error) {
+		ns, err := resolveNamespacedListNamespace(input)
+		if err != nil {
+			return errResult("%v", err), nil, nil
+		}
 		pods, err := k8s.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return errResult("failed to list pods: %v", err), nil, nil
 		}
 
-		var lines []string
-		lines = append(lines, fmt.Sprintf("Pods in namespace '%s' (%d total):\n", ns, len(pods.Items)))
-		lines = append(lines, "NAME | STATUS | READY | RESTARTS | AGE | NODE")
-		lines = append(lines, "-----|--------|-------|----------|-----|-----")
+		var rows [][]string
 		for _, p := range pods.Items {
 			ready := 0
 			total := len(p.Spec.Containers)
@@ -273,10 +348,14 @@ func main() {
 				}
 				restarts += cs.RestartCount
 			}
-			lines = append(lines, fmt.Sprintf("%s | %s | %d/%d | %d | %s | %s",
-				p.Name, string(p.Status.Phase), ready, total, restarts, ageStr(p.CreationTimestamp), p.Spec.NodeName))
+			rows = append(rows, namespacedListRow(ns, p.Namespace,
+				p.Name, string(p.Status.Phase), fmt.Sprintf("%d/%d", ready, total), fmt.Sprintf("%d", restarts), ageStr(p.CreationTimestamp), p.Spec.NodeName))
 		}
-		return textResult(strings.Join(lines, "\n")), nil, nil
+		return textResult(formatTable(
+			namespacedListTitle("Pods", ns, len(pods.Items)),
+			namespacedListHeaders(ns, "NAME", "STATUS", "READY", "RESTARTS", "AGE", "NODE"),
+			rows,
+		)), nil, nil
 	})
 
 	// get_pod
@@ -293,50 +372,7 @@ func main() {
 			return errResult("failed to get pod: %v", err), nil, nil
 		}
 
-		var lines []string
-		lines = append(lines, fmt.Sprintf("Pod: %s/%s", ns, pod.Name))
-		lines = append(lines, fmt.Sprintf("Status: %s", string(pod.Status.Phase)))
-		lines = append(lines, fmt.Sprintf("Node: %s", pod.Spec.NodeName))
-		lines = append(lines, fmt.Sprintf("IP: %s", pod.Status.PodIP))
-		lines = append(lines, fmt.Sprintf("Created: %s (%s ago)", pod.CreationTimestamp.Format(time.RFC3339), ageStr(pod.CreationTimestamp)))
-
-		if len(pod.Labels) > 0 {
-			lines = append(lines, "\nLabels:")
-			for k, v := range pod.Labels {
-				lines = append(lines, fmt.Sprintf("  %s: %s", k, v))
-			}
-		}
-
-		lines = append(lines, "\nContainers:")
-		for _, c := range pod.Spec.Containers {
-			lines = append(lines, fmt.Sprintf("  %s: %s", c.Name, c.Image))
-		}
-
-		if len(pod.Status.ContainerStatuses) > 0 {
-			lines = append(lines, "\nContainer Status:")
-			for _, cs := range pod.Status.ContainerStatuses {
-				state := "unknown"
-				if cs.State.Running != nil {
-					state = "running"
-				} else if cs.State.Waiting != nil {
-					state = fmt.Sprintf("waiting (%s)", cs.State.Waiting.Reason)
-				} else if cs.State.Terminated != nil {
-					state = fmt.Sprintf("terminated (%s)", cs.State.Terminated.Reason)
-				}
-				lines = append(lines, fmt.Sprintf("  %s: %s | restarts: %d | ready: %v",
-					cs.Name, state, cs.RestartCount, cs.Ready))
-			}
-		}
-
-		if len(pod.Status.Conditions) > 0 {
-			lines = append(lines, "\nConditions:")
-			for _, cond := range pod.Status.Conditions {
-				if cond.Status != "True" {
-					lines = append(lines, fmt.Sprintf("  %s: %s - %s", cond.Type, cond.Status, cond.Message))
-				}
-			}
-		}
-		return textResult(strings.Join(lines, "\n")), nil, nil
+		return textResult(formatPodDetails(pod, ns)), nil, nil
 	})
 
 	// get_pod_logs
@@ -388,18 +424,18 @@ func main() {
 	// list_services
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_services",
-		Description: "[READONLY] List all services in a namespace with type, cluster IP, external IP, and ports",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespaceInput) (*mcp.CallToolResult, any, error) {
-		ns := nsOrDefault(input.Namespace)
+		Description: "[READONLY] List services with type, cluster IP, external IP, and ports. Use all_namespaces=true to list across all namespaces.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespacedListInput) (*mcp.CallToolResult, any, error) {
+		ns, err := resolveNamespacedListNamespace(input)
+		if err != nil {
+			return errResult("%v", err), nil, nil
+		}
 		svcs, err := k8s.CoreV1().Services(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return errResult("failed to list services: %v", err), nil, nil
 		}
 
-		var lines []string
-		lines = append(lines, fmt.Sprintf("Services in namespace '%s' (%d total):\n", ns, len(svcs.Items)))
-		lines = append(lines, "NAME | TYPE | CLUSTER-IP | EXTERNAL-IP | PORTS | AGE")
-		lines = append(lines, "-----|------|-----------|-------------|-------|----")
+		var rows [][]string
 		for _, s := range svcs.Items {
 			extIP := "<none>"
 			if len(s.Spec.ExternalIPs) > 0 {
@@ -430,10 +466,14 @@ func main() {
 				clusterIP = "Headless"
 			}
 
-			lines = append(lines, fmt.Sprintf("%s | %s | %s | %s | %s | %s",
+			rows = append(rows, namespacedListRow(ns, s.Namespace,
 				s.Name, string(s.Spec.Type), clusterIP, extIP, strings.Join(ports, ","), ageStr(s.CreationTimestamp)))
 		}
-		return textResult(strings.Join(lines, "\n")), nil, nil
+		return textResult(formatTable(
+			namespacedListTitle("Services", ns, len(svcs.Items)),
+			namespacedListHeaders(ns, "NAME", "TYPE", "CLUSTER-IP", "EXTERNAL-IP", "PORTS", "AGE"),
+			rows,
+		)), nil, nil
 	})
 
 	// get_service
@@ -490,27 +530,31 @@ func main() {
 	// list_deployments
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_deployments",
-		Description: "[READONLY] List all deployments in a namespace with replica status",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespaceInput) (*mcp.CallToolResult, any, error) {
-		ns := nsOrDefault(input.Namespace)
+		Description: "[READONLY] List deployments with replica status. Use all_namespaces=true to list across all namespaces.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespacedListInput) (*mcp.CallToolResult, any, error) {
+		ns, err := resolveNamespacedListNamespace(input)
+		if err != nil {
+			return errResult("%v", err), nil, nil
+		}
 		deploys, err := k8s.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return errResult("failed to list deployments: %v", err), nil, nil
 		}
 
-		var lines []string
-		lines = append(lines, fmt.Sprintf("Deployments in namespace '%s' (%d total):\n", ns, len(deploys.Items)))
-		lines = append(lines, "NAME | READY | UP-TO-DATE | AVAILABLE | AGE")
-		lines = append(lines, "-----|-------|-----------|-----------|----")
+		var rows [][]string
 		for _, d := range deploys.Items {
 			var desired int32
 			if d.Spec.Replicas != nil {
 				desired = *d.Spec.Replicas
 			}
-			lines = append(lines, fmt.Sprintf("%s | %d/%d | %d | %d | %s",
-				d.Name, d.Status.ReadyReplicas, desired, d.Status.UpdatedReplicas, d.Status.AvailableReplicas, ageStr(d.CreationTimestamp)))
+			rows = append(rows, namespacedListRow(ns, d.Namespace,
+				d.Name, fmt.Sprintf("%d/%d", d.Status.ReadyReplicas, desired), fmt.Sprintf("%d", d.Status.UpdatedReplicas), fmt.Sprintf("%d", d.Status.AvailableReplicas), ageStr(d.CreationTimestamp)))
 		}
-		return textResult(strings.Join(lines, "\n")), nil, nil
+		return textResult(formatTable(
+			namespacedListTitle("Deployments", ns, len(deploys.Items)),
+			namespacedListHeaders(ns, "NAME", "READY", "UP-TO-DATE", "AVAILABLE", "AGE"),
+			rows,
+		)), nil, nil
 	})
 
 	// get_deployment
@@ -556,27 +600,31 @@ func main() {
 	// list_statefulsets
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_statefulsets",
-		Description: "[READONLY] List all StatefulSets in a namespace with replica status",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespaceInput) (*mcp.CallToolResult, any, error) {
-		ns := nsOrDefault(input.Namespace)
+		Description: "[READONLY] List StatefulSets with replica status. Use all_namespaces=true to list across all namespaces.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespacedListInput) (*mcp.CallToolResult, any, error) {
+		ns, err := resolveNamespacedListNamespace(input)
+		if err != nil {
+			return errResult("%v", err), nil, nil
+		}
 		stss, err := k8s.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return errResult("failed to list statefulsets: %v", err), nil, nil
 		}
 
-		var lines []string
-		lines = append(lines, fmt.Sprintf("StatefulSets in namespace '%s' (%d total):\n", ns, len(stss.Items)))
-		lines = append(lines, "NAME | READY | AGE")
-		lines = append(lines, "-----|-------|----")
+		var rows [][]string
 		for _, s := range stss.Items {
 			var desired int32
 			if s.Spec.Replicas != nil {
 				desired = *s.Spec.Replicas
 			}
-			lines = append(lines, fmt.Sprintf("%s | %d/%d | %s",
-				s.Name, s.Status.ReadyReplicas, desired, ageStr(s.CreationTimestamp)))
+			rows = append(rows, namespacedListRow(ns, s.Namespace,
+				s.Name, fmt.Sprintf("%d/%d", s.Status.ReadyReplicas, desired), ageStr(s.CreationTimestamp)))
 		}
-		return textResult(strings.Join(lines, "\n")), nil, nil
+		return textResult(formatTable(
+			namespacedListTitle("StatefulSets", ns, len(stss.Items)),
+			namespacedListHeaders(ns, "NAME", "READY", "AGE"),
+			rows,
+		)), nil, nil
 	})
 
 	// get_statefulset
@@ -894,23 +942,27 @@ func main() {
 	// list_configmaps (NEW)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_configmaps",
-		Description: "[READONLY] List all ConfigMaps in a namespace",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespaceInput) (*mcp.CallToolResult, any, error) {
-		ns := nsOrDefault(input.Namespace)
+		Description: "[READONLY] List ConfigMaps. Use all_namespaces=true to list across all namespaces.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespacedListInput) (*mcp.CallToolResult, any, error) {
+		ns, err := resolveNamespacedListNamespace(input)
+		if err != nil {
+			return errResult("%v", err), nil, nil
+		}
 		cms, err := k8s.CoreV1().ConfigMaps(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return errResult("failed to list configmaps: %v", err), nil, nil
 		}
 
-		var lines []string
-		lines = append(lines, fmt.Sprintf("ConfigMaps in namespace '%s' (%d total):\n", ns, len(cms.Items)))
-		lines = append(lines, "NAME | DATA | AGE")
-		lines = append(lines, "-----|------|----")
+		var rows [][]string
 		for _, cm := range cms.Items {
-			lines = append(lines, fmt.Sprintf("%s | %d keys | %s",
-				cm.Name, len(cm.Data), ageStr(cm.CreationTimestamp)))
+			rows = append(rows, namespacedListRow(ns, cm.Namespace,
+				cm.Name, fmt.Sprintf("%d keys", len(cm.Data)), ageStr(cm.CreationTimestamp)))
 		}
-		return textResult(strings.Join(lines, "\n")), nil, nil
+		return textResult(formatTable(
+			namespacedListTitle("ConfigMaps", ns, len(cms.Items)),
+			namespacedListHeaders(ns, "NAME", "DATA", "AGE"),
+			rows,
+		)), nil, nil
 	})
 
 	// get_configmap (NEW)
@@ -921,52 +973,51 @@ func main() {
 		if input.Name == "" {
 			return errResult("name is required"), nil, nil
 		}
+		output := normalizeOutputFormat(input.Output)
+		if output == "" {
+			return errResult("unsupported output format %q. Use summary, json, or yaml", input.Output), nil, nil
+		}
 		ns := nsOrDefault(input.Namespace)
 		cm, err := k8s.CoreV1().ConfigMaps(ns).Get(ctx, input.Name, metav1.GetOptions{})
 		if err != nil {
 			return errResult("failed to get configmap: %v", err), nil, nil
 		}
 
-		var lines []string
-		lines = append(lines, fmt.Sprintf("ConfigMap: %s/%s\n", ns, cm.Name))
-
-		if len(cm.Data) > 0 {
-			lines = append(lines, "Data:")
-			for k, v := range cm.Data {
-				val := v
-				if len(val) > 500 {
-					val = val[:497] + "..."
-				}
-				lines = append(lines, fmt.Sprintf("\n--- %s ---\n%s", k, val))
-			}
+		text, err := renderConfigMap(cm, output, input.Full)
+		if err != nil {
+			return errResult("failed to render configmap: %v", err), nil, nil
 		}
-		return textResult(strings.Join(lines, "\n")), nil, nil
+		return textResult(text), nil, nil
 	})
 
 	// list_secrets (NEW)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_secrets",
-		Description: "[READONLY] List all Secrets in a namespace (keys only, no values)",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespaceInput) (*mcp.CallToolResult, any, error) {
-		ns := nsOrDefault(input.Namespace)
+		Description: "[READONLY] List Secrets (keys only, no values). Use all_namespaces=true to list across all namespaces.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespacedListInput) (*mcp.CallToolResult, any, error) {
+		ns, err := resolveNamespacedListNamespace(input)
+		if err != nil {
+			return errResult("%v", err), nil, nil
+		}
 		secrets, err := k8s.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return errResult("failed to list secrets: %v", err), nil, nil
 		}
 
-		var lines []string
-		lines = append(lines, fmt.Sprintf("Secrets in namespace '%s' (%d total):\n", ns, len(secrets.Items)))
-		lines = append(lines, "NAME | TYPE | DATA | AGE")
-		lines = append(lines, "-----|------|------|----")
+		var rows [][]string
 		for _, s := range secrets.Items {
 			keys := make([]string, 0, len(s.Data))
 			for k := range s.Data {
 				keys = append(keys, k)
 			}
-			lines = append(lines, fmt.Sprintf("%s | %s | %s | %s",
+			rows = append(rows, namespacedListRow(ns, s.Namespace,
 				s.Name, string(s.Type), strings.Join(keys, ","), ageStr(s.CreationTimestamp)))
 		}
-		return textResult(strings.Join(lines, "\n")), nil, nil
+		return textResult(formatTable(
+			namespacedListTitle("Secrets", ns, len(secrets.Items)),
+			namespacedListHeaders(ns, "NAME", "TYPE", "DATA", "AGE"),
+			rows,
+		)), nil, nil
 	})
 
 	// get_secret (NEW - values only in dangerous mode)
@@ -1007,18 +1058,18 @@ func main() {
 	// list_pvc (NEW)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_pvc",
-		Description: "[READONLY] List PersistentVolumeClaims in a namespace",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespaceInput) (*mcp.CallToolResult, any, error) {
-		ns := nsOrDefault(input.Namespace)
+		Description: "[READONLY] List PersistentVolumeClaims. Use all_namespaces=true to list across all namespaces.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespacedListInput) (*mcp.CallToolResult, any, error) {
+		ns, err := resolveNamespacedListNamespace(input)
+		if err != nil {
+			return errResult("%v", err), nil, nil
+		}
 		pvcs, err := k8s.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return errResult("failed to list PVCs: %v", err), nil, nil
 		}
 
-		var lines []string
-		lines = append(lines, fmt.Sprintf("PersistentVolumeClaims in namespace '%s' (%d total):\n", ns, len(pvcs.Items)))
-		lines = append(lines, "NAME | STATUS | VOLUME | CAPACITY | STORAGECLASS | AGE")
-		lines = append(lines, "-----|--------|--------|----------|--------------|----")
+		var rows [][]string
 		for _, pvc := range pvcs.Items {
 			capacity := "<pending>"
 			if pvc.Status.Capacity != nil {
@@ -1030,77 +1081,48 @@ func main() {
 			if pvc.Spec.StorageClassName != nil {
 				sc = *pvc.Spec.StorageClassName
 			}
-			lines = append(lines, fmt.Sprintf("%s | %s | %s | %s | %s | %s",
+			rows = append(rows, namespacedListRow(ns, pvc.Namespace,
 				pvc.Name, string(pvc.Status.Phase), pvc.Spec.VolumeName, capacity, sc, ageStr(pvc.CreationTimestamp)))
 		}
-		return textResult(strings.Join(lines, "\n")), nil, nil
+		return textResult(formatTable(
+			namespacedListTitle("PersistentVolumeClaims", ns, len(pvcs.Items)),
+			namespacedListHeaders(ns, "NAME", "STATUS", "VOLUME", "CAPACITY", "STORAGECLASS", "AGE"),
+			rows,
+		)), nil, nil
 	})
 
 	// list_ingress (NEW)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_ingress",
-		Description: "[READONLY] List Ingress resources in a namespace",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespaceInput) (*mcp.CallToolResult, any, error) {
-		ns := nsOrDefault(input.Namespace)
+		Description: "[READONLY] List Ingress resources. Use all_namespaces=true to list across all namespaces.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespacedListInput) (*mcp.CallToolResult, any, error) {
+		ns, err := resolveNamespacedListNamespace(input)
+		if err != nil {
+			return errResult("%v", err), nil, nil
+		}
 		ings, err := k8s.NetworkingV1().Ingresses(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return errResult("failed to list ingress: %v", err), nil, nil
 		}
 
-		var lines []string
-		lines = append(lines, fmt.Sprintf("Ingresses in namespace '%s' (%d total):\n", ns, len(ings.Items)))
-		lines = append(lines, "NAME | HOSTS | ADDRESS | PORTS | AGE")
-		lines = append(lines, "-----|------|---------|-------|----")
-		for _, ing := range ings.Items {
-			var hosts []string
-			for _, rule := range ing.Spec.Rules {
-				hosts = append(hosts, rule.Host)
-			}
-			hostStr := "<none>"
-			if len(hosts) > 0 {
-				hostStr = strings.Join(hosts, ",")
-			}
-
-			addr := "<none>"
-			if len(ing.Status.LoadBalancer.Ingress) > 0 {
-				if ing.Status.LoadBalancer.Ingress[0].IP != "" {
-					addr = ing.Status.LoadBalancer.Ingress[0].IP
-				} else if ing.Status.LoadBalancer.Ingress[0].Hostname != "" {
-					addr = ing.Status.LoadBalancer.Ingress[0].Hostname
-				}
-			}
-
-			ports := "80"
-			var tlsPorts []string
-			for _, tls := range ing.Spec.TLS {
-				tlsPorts = append(tlsPorts, "443")
-				_ = tls
-			}
-			if len(tlsPorts) > 0 {
-				ports = "80,443"
-			}
-
-			lines = append(lines, fmt.Sprintf("%s | %s | %s | %s | %s",
-				ing.Name, hostStr, addr, ports, ageStr(ing.CreationTimestamp)))
-		}
-		return textResult(strings.Join(lines, "\n")), nil, nil
+		return textResult(formatIngressList(ns, ings.Items)), nil, nil
 	})
 
 	// list_jobs (NEW)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_jobs",
-		Description: "[READONLY] List Jobs in a namespace",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespaceInput) (*mcp.CallToolResult, any, error) {
-		ns := nsOrDefault(input.Namespace)
+		Description: "[READONLY] List Jobs. Use all_namespaces=true to list across all namespaces.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NamespacedListInput) (*mcp.CallToolResult, any, error) {
+		ns, err := resolveNamespacedListNamespace(input)
+		if err != nil {
+			return errResult("%v", err), nil, nil
+		}
 		jobs, err := k8s.BatchV1().Jobs(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return errResult("failed to list jobs: %v", err), nil, nil
 		}
 
-		var lines []string
-		lines = append(lines, fmt.Sprintf("Jobs in namespace '%s' (%d total):\n", ns, len(jobs.Items)))
-		lines = append(lines, "NAME | COMPLETIONS | DURATION | AGE")
-		lines = append(lines, "-----|-------------|----------|----")
+		var rows [][]string
 		for _, j := range jobs.Items {
 			completions := "0/1"
 			if j.Spec.Completions != nil {
@@ -1113,10 +1135,14 @@ func main() {
 				duration = fmt.Sprintf("%.0fs", d.Seconds())
 			}
 
-			lines = append(lines, fmt.Sprintf("%s | %s | %s | %s",
+			rows = append(rows, namespacedListRow(ns, j.Namespace,
 				j.Name, completions, duration, ageStr(j.CreationTimestamp)))
 		}
-		return textResult(strings.Join(lines, "\n")), nil, nil
+		return textResult(formatTable(
+			namespacedListTitle("Jobs", ns, len(jobs.Items)),
+			namespacedListHeaders(ns, "NAME", "COMPLETIONS", "DURATION", "AGE"),
+			rows,
+		)), nil, nil
 	})
 
 	// ==================== READWRITE TOOLS ====================

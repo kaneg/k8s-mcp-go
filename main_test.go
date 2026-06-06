@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -283,7 +285,7 @@ func TestSortEventsByTime_MixedTimestamps(t *testing.T) {
 func TestToolDescriptions_HavePermissionPrefix(t *testing.T) {
 	// This is a static check - we verify the expected tool list has correct prefixes
 	readonlyTools := []string{
-		"server_info", "list_pods", "get_pod", "get_pod_logs", "list_services", "get_service",
+		"server_info", "resolve_workload", "list_pods", "get_pod", "get_pod_logs", "list_services", "get_service",
 		"list_deployments", "get_deployment", "list_statefulsets", "get_statefulset",
 		"list_namespaces", "list_nodes", "cluster_overview", "get_events",
 		"list_configmaps", "get_configmap", "list_secrets", "get_secret", "top_nodes",
@@ -303,8 +305,8 @@ func TestToolDescriptions_HavePermissionPrefix(t *testing.T) {
 
 	// Count total expected tools
 	total := len(readonlyTools) + len(readwriteTools) + len(dangerousTools)
-	if total != 34 {
-		t.Errorf("expected 34 tools total, got %d", total)
+	if total != 35 {
+		t.Errorf("expected 35 tools total, got %d", total)
 	}
 }
 
@@ -372,6 +374,171 @@ data:
 	}
 }
 
+func TestFormatIngressList_AllNamespacesIncludesNamespaceColumn(t *testing.T) {
+	ings := []networkingv1.Ingress{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "apps", CreationTimestamp: metav1.NewTime(time.Now())},
+			Spec:       networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{{Host: "web.example.com"}}},
+		},
+	}
+
+	got := formatIngressList(metav1.NamespaceAll, ings)
+
+	for _, want := range []string{
+		"Ingresses in all namespaces (1 total):",
+		"NAMESPACE | NAME | HOSTS | ADDRESS | PORTS | AGE",
+		"apps | web | web.example.com | <none> | 80 |",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("formatIngressList() missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestResolveNamespacedListNamespace_DefaultsEmptyNamespace(t *testing.T) {
+	ns, err := resolveNamespacedListNamespace(NamespacedListInput{})
+	if err != nil {
+		t.Fatalf("resolveNamespacedListNamespace returned error: %v", err)
+	}
+	if ns != "default" {
+		t.Fatalf("resolveNamespacedListNamespace(empty) = %q, want default", ns)
+	}
+}
+
+func TestResolveNamespacedListNamespace_AllNamespacesIsExplicit(t *testing.T) {
+	ns, err := resolveNamespacedListNamespace(NamespacedListInput{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("resolveNamespacedListNamespace returned error: %v", err)
+	}
+	if ns != metav1.NamespaceAll {
+		t.Fatalf("resolveNamespacedListNamespace(all_namespaces) = %q, want NamespaceAll", ns)
+	}
+}
+
+func TestResolveNamespacedListNamespace_StarMeansAllNamespaces(t *testing.T) {
+	ns, err := resolveNamespacedListNamespace(NamespacedListInput{Namespace: "*"})
+	if err != nil {
+		t.Fatalf("resolveNamespacedListNamespace returned error: %v", err)
+	}
+	if ns != metav1.NamespaceAll {
+		t.Fatalf("resolveNamespacedListNamespace(namespace=*) = %q, want NamespaceAll", ns)
+	}
+}
+
+func TestResolveNamespacedListNamespace_RejectsNamespaceWithAllNamespaces(t *testing.T) {
+	_, err := resolveNamespacedListNamespace(NamespacedListInput{Namespace: "apps", AllNamespaces: true})
+	if err == nil {
+		t.Fatal("resolveNamespacedListNamespace should reject namespace with all_namespaces=true")
+	}
+}
+
+func TestFormatConfigMapValue_TruncatesByDefault(t *testing.T) {
+	value := strings.Repeat("a", 600)
+
+	got := formatConfigMapValue(value, false)
+
+	if len(got) != 500 {
+		t.Fatalf("formatConfigMapValue() length = %d, want 500", len(got))
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("formatConfigMapValue() = %q, want truncated suffix", got)
+	}
+}
+
+func TestFormatConfigMapValue_ReturnsFullValueWhenRequested(t *testing.T) {
+	value := strings.Repeat("a", 600)
+
+	got := formatConfigMapValue(value, true)
+
+	if got != value {
+		t.Fatalf("formatConfigMapValue(full=true) length = %d, want %d", len(got), len(value))
+	}
+}
+
+func TestFormatConfigMapSummary_UsesPreviewUnlessFullRequested(t *testing.T) {
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Data:       map[string]string{"big": strings.Repeat("a", 600)},
+	}
+
+	preview := formatConfigMapSummary(cm, false)
+	full := formatConfigMapSummary(cm, true)
+
+	if !strings.Contains(preview, strings.Repeat("a", 497)+"...") {
+		t.Fatalf("summary preview did not truncate value:\n%s", preview)
+	}
+	if !strings.Contains(full, strings.Repeat("a", 600)) {
+		t.Fatalf("full summary did not include complete value:\n%s", full)
+	}
+}
+
+func TestRenderConfigMap_JSON(t *testing.T) {
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Data:       map[string]string{"key": "value"},
+	}
+
+	got, err := renderConfigMap(cm, OutputJSON, false)
+	if err != nil {
+		t.Fatalf("renderConfigMap returned error: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+		t.Fatalf("renderConfigMap JSON was invalid: %v\n%s", err, got)
+	}
+	if decoded["kind"] != "ConfigMap" {
+		t.Fatalf("kind = %v, want ConfigMap in:\n%s", decoded["kind"], got)
+	}
+}
+
+func TestRenderConfigMap_YAML(t *testing.T) {
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Data:       map[string]string{"key": "value"},
+	}
+
+	got, err := renderConfigMap(cm, OutputYAML, false)
+	if err != nil {
+		t.Fatalf("renderConfigMap returned error: %v", err)
+	}
+	for _, want := range []string{"kind: ConfigMap", "name: app", "key: value"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("renderConfigMap YAML missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestNormalizeOutputFormat_DefaultsAndLowercases(t *testing.T) {
+	if got := normalizeOutputFormat(""); got != OutputSummary {
+		t.Fatalf("normalizeOutputFormat(empty) = %q, want %q", got, OutputSummary)
+	}
+	if got := normalizeOutputFormat("JSON"); got != OutputJSON {
+		t.Fatalf("normalizeOutputFormat(JSON) = %q, want %q", got, OutputJSON)
+	}
+}
+
+func TestNormalizeOutputFormat_RejectsUnknown(t *testing.T) {
+	if got := normalizeOutputFormat("xml"); got != "" {
+		t.Fatalf("normalizeOutputFormat(xml) = %q, want empty invalid marker", got)
+	}
+}
+
+func TestFormatTable(t *testing.T) {
+	got := formatTable("Things (1 total):", []string{"NAME", "AGE"}, [][]string{{"web", "3d"}})
+
+	for _, want := range []string{
+		"Things (1 total):",
+		"NAME | AGE",
+		"----|----",
+		"web | 3d",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatTable() missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 // ==================== normalizeTableLines helper ====================
 
 func TestNormalizeTableLines(t *testing.T) {
@@ -382,6 +549,62 @@ func TestNormalizeTableLines(t *testing.T) {
 	}
 	if lines[0] != "line1" || lines[1] != "line2" || lines[2] != "line3" {
 		t.Errorf("unexpected lines: %v", lines)
+	}
+}
+
+func TestFormatPodDetails_IncludesOwnerReferences(t *testing.T) {
+	controller := true
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "miniagent-0",
+			Namespace: "miniagent",
+			OwnerReferences: []metav1.OwnerReference{
+				{Kind: "StatefulSet", Name: "miniagent", Controller: &controller},
+			},
+			CreationTimestamp: metav1.NewTime(time.Now()),
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.1"},
+		Spec: corev1.PodSpec{NodeName: "pi5", Containers: []corev1.Container{
+			{Name: "miniagent", Image: "miniagent:latest"},
+		}},
+	}
+
+	got := formatPodDetails(pod, "miniagent")
+
+	for _, want := range []string{
+		"Controller: StatefulSet/miniagent",
+		`Suggested next tool: get_statefulset {"namespace":"miniagent","name":"miniagent"}`,
+		"Owners:",
+		"StatefulSet/miniagent (controller)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatPodDetails() missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestFormatResolvedWorkload_IncludesMatchesAndSuggestedTools(t *testing.T) {
+	matches := []WorkloadMatch{
+		{Kind: "StatefulSet", Namespace: "miniagent", Name: "miniagent", SuggestedTool: "get_statefulset"},
+		{Kind: "Service", Namespace: "miniagent", Name: "miniagent", SuggestedTool: "get_service"},
+		{Kind: "Pod", Namespace: "miniagent", Name: "miniagent-0", SuggestedTool: "get_pod"},
+	}
+
+	got := formatResolvedWorkload("miniagent", "miniagent", matches)
+
+	for _, want := range []string{
+		"Resolved workload candidates for miniagent/miniagent:",
+		"StatefulSet | miniagent | miniagent | get_statefulset",
+		"Service | miniagent | miniagent | get_service",
+		"Pod | miniagent | miniagent-0 | get_pod",
+		`Suggested next tools:`,
+		`get_statefulset {"namespace":"miniagent","name":"miniagent"}`,
+		`get_service {"namespace":"miniagent","name":"miniagent"}`,
+		`get_pod {"namespace":"miniagent","name":"miniagent-0"}`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatResolvedWorkload() missing %q in:\n%s", want, got)
+		}
 	}
 }
 

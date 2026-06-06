@@ -167,31 +167,32 @@ With `k8s-mcp-go`, you decide whether the assistant can:
 
 **The permission boundary is the product.**
 
-## Available Tools (34 total)
+## Available Tools (35 total)
 
 Tools are grouped by permission level.
 
-### Readonly (23)
+### Readonly (24)
 
 | Tool | Description |
 |------|-------------|
 | `server_info` | Show server version, mode, kubeconfig path, and runtime details |
-| `list_pods` | List pods in a namespace |
+| `resolve_workload` | Resolve an app/workload name to matching resources and suggested next tools |
+| `list_pods` | List pods; supports `all_namespaces=true` |
 | `get_pod` | Get pod details |
 | `get_pod_logs` | Get pod logs |
-| `list_deployments` | List deployments |
+| `list_deployments` | List deployments; supports `all_namespaces=true` |
 | `get_deployment` | Get deployment details |
-| `list_statefulsets` | List StatefulSets |
+| `list_statefulsets` | List StatefulSets; supports `all_namespaces=true` |
 | `get_statefulset` | Get StatefulSet details |
-| `list_services` | List services |
+| `list_services` | List services; supports `all_namespaces=true` |
 | `get_service` | Get service details |
-| `list_configmaps` | List ConfigMaps |
+| `list_configmaps` | List ConfigMaps; supports `all_namespaces=true` |
 | `get_configmap` | Get ConfigMap data |
-| `list_secrets` | List Secrets (keys only) |
+| `list_secrets` | List Secrets (keys only); supports `all_namespaces=true` |
 | `get_secret` | Get Secret metadata and keys |
-| `list_pvc` | List PersistentVolumeClaims |
-| `list_ingress` | List Ingress resources |
-| `list_jobs` | List Jobs |
+| `list_pvc` | List PersistentVolumeClaims; supports `all_namespaces=true` |
+| `list_ingress` | List Ingress resources; supports `all_namespaces=true` |
+| `list_jobs` | List Jobs; supports `all_namespaces=true` |
 | `top_nodes` | Current node CPU and memory usage |
 | `top_pods` | Current pod CPU and memory usage |
 | `list_nodes` | List cluster nodes |
