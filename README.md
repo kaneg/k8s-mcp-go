@@ -212,7 +212,7 @@ Tools are grouped by permission level.
 | `create_namespace` | Create a new namespace |
 | `patch_deployment` | Apply strategic merge patch |
 
-### Dangerous (6)
+### Dangerous (7)
 
 | Tool | Description |
 |------|-------------|
@@ -220,8 +220,18 @@ Tools are grouped by permission level.
 | `delete_deployment` | Delete a deployment |
 | `delete_statefulset` | Delete a StatefulSet and its pods |
 | `delete_daemonset` | Delete a DaemonSet and its pods |
+| `delete_resource` | Delete a resource without a dedicated delete tool |
 | `delete_namespace` | Delete a namespace and all resources |
 | `apply_yaml` | Apply arbitrary YAML manifest |
+
+Prefer the dedicated delete tools above when one exists. Use `delete_resource`
+as the fallback for other kinds. It resolves namespaced versus cluster-scoped
+resources through Kubernetes discovery.
+
+```json
+{"api_version":"v1","kind":"ServiceAccount","namespace":"apps","name":"builder"}
+{"api_version":"rbac.authorization.k8s.io/v1","kind":"ClusterRole","name":"auditor"}
+```
 
 ## Environment Variables
 

@@ -299,7 +299,7 @@ func TestToolDescriptions_HavePermissionPrefix(t *testing.T) {
 		"rollout_status", "create_namespace", "patch_deployment",
 	}
 	dangerousTools := []string{
-		"delete_pod", "delete_deployment", "delete_statefulset", "delete_daemonset", "delete_namespace", "apply_yaml",
+		"delete_pod", "delete_deployment", "delete_statefulset", "delete_daemonset", "delete_resource", "delete_namespace", "apply_yaml",
 	}
 
 	_ = readonlyTools
@@ -308,8 +308,8 @@ func TestToolDescriptions_HavePermissionPrefix(t *testing.T) {
 
 	// Count total expected tools
 	total := len(readonlyTools) + len(readwriteTools) + len(dangerousTools)
-	if total != 37 {
-		t.Errorf("expected 37 tools total, got %d", total)
+	if total != 38 {
+		t.Errorf("expected 38 tools total, got %d", total)
 	}
 }
 
@@ -413,6 +413,141 @@ func TestDeleteWorkloadHelpers_IncludeResourceContextInAPIErrors(t *testing.T) {
 				t.Fatalf("result = %q, IsError = %v", resultText(result), result.IsError)
 			}
 		})
+	}
+}
+
+func testDeleteResourceMapper() meta.RESTMapper {
+	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{
+		{Group: "", Version: "v1"},
+		{Group: "rbac.authorization.k8s.io", Version: "v1"},
+	})
+	mapper.Add(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ServiceAccount"}, meta.RESTScopeNamespace)
+	mapper.Add(schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}, meta.RESTScopeRoot)
+	return mapper
+}
+
+func TestDeleteResource_DeletesNamespacedResourceUsingDefaultNamespace(t *testing.T) {
+	ctx := context.Background()
+	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	gvr := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "serviceaccounts"}
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "ServiceAccount",
+		"metadata": map[string]any{"name": "builder", "namespace": "default"},
+	}}
+	if _, err := client.Resource(gvr).Namespace("default").Create(ctx, obj, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := deleteResource(ctx, client, testDeleteResourceMapper(), DeleteResourceInput{
+		APIVersion: "v1", Kind: "ServiceAccount", Name: "builder",
+	})
+	if result.IsError {
+		t.Fatalf("deleteResource returned error: %s", resultText(result))
+	}
+	for _, want := range []string{"ServiceAccount default/builder deleted", "apiVersion: v1", "resource: serviceaccounts", "scope: namespaced"} {
+		if !strings.Contains(resultText(result), want) {
+			t.Fatalf("result missing %q: %s", want, resultText(result))
+		}
+	}
+	if _, err := client.Resource(gvr).Namespace("default").Get(ctx, "builder", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("ServiceAccount still exists or lookup failed: %v", err)
+	}
+}
+
+func TestDeleteResource_DeletesClusterScopedResource(t *testing.T) {
+	ctx := context.Background()
+	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	gvr := schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterroles"}
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole",
+		"metadata": map[string]any{"name": "auditor"},
+	}}
+	if _, err := client.Resource(gvr).Create(ctx, obj, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := deleteResource(ctx, client, testDeleteResourceMapper(), DeleteResourceInput{
+		APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "auditor",
+	})
+	if result.IsError {
+		t.Fatalf("deleteResource returned error: %s", resultText(result))
+	}
+	for _, want := range []string{"ClusterRole auditor deleted", "resource: clusterroles", "scope: cluster"} {
+		if !strings.Contains(resultText(result), want) {
+			t.Fatalf("result missing %q: %s", want, resultText(result))
+		}
+	}
+	if _, err := client.Resource(gvr).Get(ctx, "auditor", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("ClusterRole still exists or lookup failed: %v", err)
+	}
+}
+
+func TestDeleteResource_RejectsKindsWithDedicatedTools(t *testing.T) {
+	tests := []struct{ apiVersion, kind, call string }{
+		{"v1", "Pod", `delete_pod {"namespace":"apps","name":"target"}`},
+		{"apps/v1", "Deployment", `delete_deployment {"namespace":"apps","name":"target"}`},
+		{"apps/v1", "StatefulSet", `delete_statefulset {"namespace":"apps","name":"target"}`},
+		{"apps/v1", "DaemonSet", `delete_daemonset {"namespace":"apps","name":"target"}`},
+		{"v1", "Namespace", `delete_namespace {"namespace":"target"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			result := deleteResource(context.Background(), dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), testDeleteResourceMapper(), DeleteResourceInput{
+				APIVersion: tt.apiVersion, Kind: tt.kind, Name: "target", Namespace: "apps",
+			})
+			if !result.IsError || !strings.Contains(resultText(result), tt.call) {
+				t.Fatalf("result = %q, IsError = %v", resultText(result), result.IsError)
+			}
+		})
+	}
+}
+
+func TestDeleteResource_ValidatesRequiredFields(t *testing.T) {
+	tests := []struct {
+		name  string
+		input DeleteResourceInput
+		want  string
+	}{
+		{"api version", DeleteResourceInput{}, "api_version is required"},
+		{"kind", DeleteResourceInput{APIVersion: "v1"}, "kind is required"},
+		{"name", DeleteResourceInput{APIVersion: "v1", Kind: "ServiceAccount"}, "name is required"},
+		{"invalid api version", DeleteResourceInput{APIVersion: "bad/version/extra", Kind: "ServiceAccount", Name: "builder"}, "invalid api_version"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := deleteResource(context.Background(), dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), testDeleteResourceMapper(), tt.input)
+			if !result.IsError || !strings.Contains(resultText(result), tt.want) {
+				t.Fatalf("result = %q, IsError = %v", resultText(result), result.IsError)
+			}
+		})
+	}
+}
+
+func TestDeleteResource_RejectsNamespaceForClusterScopedResource(t *testing.T) {
+	result := deleteResource(context.Background(), dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), testDeleteResourceMapper(), DeleteResourceInput{
+		APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "auditor", Namespace: "default",
+	})
+	if !result.IsError || !strings.Contains(resultText(result), "cluster-scoped; omit namespace") {
+		t.Fatalf("result = %q, IsError = %v", resultText(result), result.IsError)
+	}
+}
+
+func TestDeleteResource_ReturnsMappingAndAPIContext(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	unmapped := deleteResource(context.Background(), client, testDeleteResourceMapper(), DeleteResourceInput{
+		APIVersion: "v1", Kind: "ConfigMap", Name: "missing",
+	})
+	if !unmapped.IsError || !strings.Contains(resultText(unmapped), "failed to resolve v1 ConfigMap") {
+		t.Fatalf("mapping result = %q", resultText(unmapped))
+	}
+
+	missing := deleteResource(context.Background(), client, testDeleteResourceMapper(), DeleteResourceInput{
+		APIVersion: "v1", Kind: "ServiceAccount", Name: "missing",
+	})
+	for _, want := range []string{"failed to delete ServiceAccount default/missing", "apiVersion: v1", "resource: serviceaccounts"} {
+		if !missing.IsError || !strings.Contains(resultText(missing), want) {
+			t.Fatalf("API result missing %q: %s", want, resultText(missing))
+		}
 	}
 }
 

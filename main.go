@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/discovery"
@@ -148,6 +149,13 @@ type DaemonSetInput struct {
 	Namespace string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
 }
 
+type DeleteResourceInput struct {
+	APIVersion string `json:"api_version" jsonschema:"Kubernetes API version (for example v1 or rbac.authorization.k8s.io/v1)"`
+	Kind       string `json:"kind" jsonschema:"Kubernetes resource kind (for example ServiceAccount or ClusterRole)"`
+	Name       string `json:"name" jsonschema:"Resource name"`
+	Namespace  string `json:"namespace,omitempty" jsonschema:"Namespace for namespaced resources (default: default); omit for cluster-scoped resources"`
+}
+
 type PatchInput struct {
 	Name      string `json:"name" jsonschema:"Resource name"`
 	Namespace string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
@@ -180,6 +188,67 @@ func deleteDaemonSet(ctx context.Context, k8s kubernetes.Interface, input Daemon
 		return errResult("failed to delete daemonset %s/%s: %v", ns, input.Name, err)
 	}
 	return textResult(fmt.Sprintf("⚠️ DaemonSet %s/%s deleted.", ns, input.Name))
+}
+
+var dedicatedDeleteTools = map[schema.GroupVersionKind]string{
+	{Group: "", Version: "v1", Kind: "Pod"}:             "delete_pod",
+	{Group: "", Version: "v1", Kind: "Namespace"}:       "delete_namespace",
+	{Group: "apps", Version: "v1", Kind: "Deployment"}:  "delete_deployment",
+	{Group: "apps", Version: "v1", Kind: "StatefulSet"}: "delete_statefulset",
+	{Group: "apps", Version: "v1", Kind: "DaemonSet"}:   "delete_daemonset",
+}
+
+func dedicatedDeleteTool(gvk schema.GroupVersionKind) (string, bool) {
+	tool, ok := dedicatedDeleteTools[gvk]
+	return tool, ok
+}
+
+func deleteResource(ctx context.Context, client dynamic.Interface, mapper meta.RESTMapper, input DeleteResourceInput) *mcp.CallToolResult {
+	if input.APIVersion == "" {
+		return errResult("api_version is required")
+	}
+	if input.Kind == "" {
+		return errResult("kind is required")
+	}
+	if input.Name == "" {
+		return errResult("name is required")
+	}
+
+	gv, err := schema.ParseGroupVersion(input.APIVersion)
+	if err != nil {
+		return errResult("invalid api_version %q: %v", input.APIVersion, err)
+	}
+	gvk := gv.WithKind(input.Kind)
+	if tool, ok := dedicatedDeleteTool(gvk); ok {
+		args := fmt.Sprintf(`{"namespace":%q,"name":%q}`, nsOrDefault(input.Namespace), input.Name)
+		if gvk.Kind == "Namespace" {
+			args = fmt.Sprintf(`{"namespace":%q}`, input.Name)
+		}
+		return errResult("%s %s uses dedicated tool %s; call %s %s", input.APIVersion, input.Kind, tool, tool, args)
+	}
+
+	mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		return errResult("failed to resolve %s %s: %v", input.APIVersion, input.Kind, err)
+	}
+
+	var resource dynamic.ResourceInterface
+	displayName, scopeName := input.Name, "cluster"
+	if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
+		ns := nsOrDefault(input.Namespace)
+		resource = client.Resource(mapping.Resource).Namespace(ns)
+		displayName, scopeName = ns+"/"+input.Name, "namespaced"
+	} else {
+		if input.Namespace != "" {
+			return errResult("%s %s is cluster-scoped; omit namespace", input.APIVersion, input.Kind)
+		}
+		resource = client.Resource(mapping.Resource)
+	}
+
+	if err := resource.Delete(ctx, input.Name, metav1.DeleteOptions{}); err != nil {
+		return errResult("failed to delete %s %s (apiVersion: %s, resource: %s): %v", input.Kind, displayName, input.APIVersion, mapping.Resource.Resource, err)
+	}
+	return textResult(fmt.Sprintf("%s %s deleted (apiVersion: %s, resource: %s, scope: %s).", input.Kind, displayName, input.APIVersion, mapping.Resource.Resource, scopeName))
 }
 
 // --- Main ---
@@ -1459,6 +1528,17 @@ func main() {
 				return permDeniedResult("delete_daemonset", ModeDangerous), nil, nil
 			}
 			return deleteDaemonSet(ctx, k8s, input), nil, nil
+		})
+
+		// delete_resource
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "delete_resource",
+			Description: "[DANGEROUS] Delete a Kubernetes resource that has no dedicated delete tool. Prefer delete_pod, delete_deployment, delete_statefulset, delete_daemonset, or delete_namespace when applicable. Requires api_version, kind, and name; namespace defaults to default for namespaced resources and must be omitted for cluster-scoped resources.",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input DeleteResourceInput) (*mcp.CallToolResult, any, error) {
+			if !requireDangerous("delete_resource") {
+				return permDeniedResult("delete_resource", ModeDangerous), nil, nil
+			}
+			return deleteResource(ctx, dynamicClient, restMapper, input), nil, nil
 		})
 
 		// apply_yaml

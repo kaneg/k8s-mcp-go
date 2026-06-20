@@ -140,6 +140,7 @@ for entry in "${platforms[@]}"; do
     { "name": "delete_deployment", "description": "Delete a deployment [dangerous]" },
     { "name": "delete_statefulset", "description": "Delete a StatefulSet and its pods [dangerous]" },
     { "name": "delete_daemonset", "description": "Delete a DaemonSet and its pods [dangerous]" },
+    { "name": "delete_resource", "description": "Delete a Kubernetes resource without a dedicated delete tool [dangerous]" },
     { "name": "delete_namespace", "description": "Delete a namespace [dangerous]" },
     { "name": "apply_yaml", "description": "Apply arbitrary YAML manifest [dangerous]" }
   ],
