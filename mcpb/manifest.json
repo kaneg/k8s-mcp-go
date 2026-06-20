@@ -4,7 +4,7 @@
   "display_name": "K8s MCP Server (Go)",
   "version": "0.0.0",
   "description": "Safe Kubernetes access for AI agents via MCP. Read-only by default, with explicit permission modes.",
-  "long_description": "A lightweight MCP server providing safe Kubernetes cluster access for AI agents. Features three permission modes (readonly/readwrite/dangerous) to prevent accidental destructive operations. Written in Go with zero dependencies beyond kubeconfig. Supports 35 tools covering server info, workload resolution, Pods, Pod Metrics, Deployments, StatefulSets, Services, ConfigMaps, Secrets, PVCs, Ingresses, Jobs, Node Metrics, Nodes, Namespaces, and Events.",
+  "long_description": "A lightweight MCP server providing safe Kubernetes cluster access for AI agents. Features three permission modes (readonly/readwrite/dangerous) to prevent accidental destructive operations. Written in Go with zero dependencies beyond kubeconfig. Supports 38 tools covering server info, workload resolution, Pods, Pod Metrics, Deployments, StatefulSets, Services, ConfigMaps, Secrets, PVCs, Ingresses, Jobs, Node Metrics, Nodes, Namespaces, and Events.",
   "author": {
     "name": "Kane",
     "email": "gzkaneg@gmail.com"
