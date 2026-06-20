@@ -212,12 +212,14 @@ Tools are grouped by permission level.
 | `create_namespace` | Create a new namespace |
 | `patch_deployment` | Apply strategic merge patch |
 
-### Dangerous (4)
+### Dangerous (6)
 
 | Tool | Description |
 |------|-------------|
 | `delete_pod` | Delete a pod |
 | `delete_deployment` | Delete a deployment |
+| `delete_statefulset` | Delete a StatefulSet and its pods |
+| `delete_daemonset` | Delete a DaemonSet and its pods |
 | `delete_namespace` | Delete a namespace and all resources |
 | `apply_yaml` | Apply arbitrary YAML manifest |
 

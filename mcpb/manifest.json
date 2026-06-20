@@ -64,6 +64,8 @@
     { "name": "patch_deployment", "description": "Patch a deployment [readwrite]" },
     { "name": "delete_pod", "description": "Delete a pod [dangerous]" },
     { "name": "delete_deployment", "description": "Delete a deployment [dangerous]" },
+    { "name": "delete_statefulset", "description": "Delete a StatefulSet and its pods [dangerous]" },
+    { "name": "delete_daemonset", "description": "Delete a DaemonSet and its pods [dangerous]" },
     { "name": "delete_namespace", "description": "Delete a namespace [dangerous]" },
     { "name": "apply_yaml", "description": "Apply arbitrary YAML manifest [dangerous]" }
   ],

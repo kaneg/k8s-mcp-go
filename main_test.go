@@ -8,15 +8,18 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic/fake"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
@@ -296,7 +299,7 @@ func TestToolDescriptions_HavePermissionPrefix(t *testing.T) {
 		"rollout_status", "create_namespace", "patch_deployment",
 	}
 	dangerousTools := []string{
-		"delete_pod", "delete_deployment", "delete_namespace", "apply_yaml",
+		"delete_pod", "delete_deployment", "delete_statefulset", "delete_daemonset", "delete_namespace", "apply_yaml",
 	}
 
 	_ = readonlyTools
@@ -305,8 +308,8 @@ func TestToolDescriptions_HavePermissionPrefix(t *testing.T) {
 
 	// Count total expected tools
 	total := len(readonlyTools) + len(readwriteTools) + len(dangerousTools)
-	if total != 35 {
-		t.Errorf("expected 35 tools total, got %d", total)
+	if total != 37 {
+		t.Errorf("expected 37 tools total, got %d", total)
 	}
 }
 
@@ -328,11 +331,96 @@ func TestResultText_Empty(t *testing.T) {
 	}
 }
 
+func TestDeleteStatefulSet_DeletesFromDefaultNamespace(t *testing.T) {
+	client := k8sfake.NewSimpleClientset(&appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "database", Namespace: "default"},
+	})
+
+	result := deleteStatefulSet(context.Background(), client, StatefulSetInput{Name: "database"})
+	if result.IsError {
+		t.Fatalf("deleteStatefulSet returned error: %s", resultText(result))
+	}
+	if got := resultText(result); got != "⚠️ StatefulSet default/database deleted." {
+		t.Fatalf("result = %q", got)
+	}
+	_, err := client.AppsV1().StatefulSets("default").Get(context.Background(), "database", metav1.GetOptions{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("StatefulSet still exists or lookup failed: %v", err)
+	}
+}
+
+func TestDeleteDaemonSet_DeletesFromDefaultNamespace(t *testing.T) {
+	client := k8sfake.NewSimpleClientset(&appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-agent", Namespace: "default"},
+	})
+
+	result := deleteDaemonSet(context.Background(), client, DaemonSetInput{Name: "node-agent"})
+	if result.IsError {
+		t.Fatalf("deleteDaemonSet returned error: %s", resultText(result))
+	}
+	if got := resultText(result); got != "⚠️ DaemonSet default/node-agent deleted." {
+		t.Fatalf("result = %q", got)
+	}
+	_, err := client.AppsV1().DaemonSets("default").Get(context.Background(), "node-agent", metav1.GetOptions{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("DaemonSet still exists or lookup failed: %v", err)
+	}
+}
+
+func TestDeleteWorkloadHelpers_RequireName(t *testing.T) {
+	client := k8sfake.NewSimpleClientset()
+	tests := []struct {
+		name string
+		run  func() *mcp.CallToolResult
+	}{
+		{"statefulset", func() *mcp.CallToolResult {
+			return deleteStatefulSet(context.Background(), client, StatefulSetInput{})
+		}},
+		{"daemonset", func() *mcp.CallToolResult {
+			return deleteDaemonSet(context.Background(), client, DaemonSetInput{})
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.run()
+			if !result.IsError || !strings.Contains(resultText(result), "name is required") {
+				t.Fatalf("result = %q, IsError = %v", resultText(result), result.IsError)
+			}
+		})
+	}
+}
+
+func TestDeleteWorkloadHelpers_IncludeResourceContextInAPIErrors(t *testing.T) {
+	client := k8sfake.NewSimpleClientset()
+	tests := []struct {
+		name string
+		run  func() *mcp.CallToolResult
+		want string
+	}{
+		{"statefulset", func() *mcp.CallToolResult {
+			return deleteStatefulSet(context.Background(), client, StatefulSetInput{Name: "missing", Namespace: "tools"})
+		}, "failed to delete statefulset tools/missing"},
+		{"daemonset", func() *mcp.CallToolResult {
+			return deleteDaemonSet(context.Background(), client, DaemonSetInput{Name: "missing", Namespace: "tools"})
+		}, "failed to delete daemonset tools/missing"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.run()
+			if !result.IsError || !strings.Contains(resultText(result), tt.want) {
+				t.Fatalf("result = %q, IsError = %v", resultText(result), result.IsError)
+			}
+		})
+	}
+}
+
 func TestApplyYAMLManifests_AppliesMultiDocumentYAML(t *testing.T) {
 	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{{Group: "", Version: "v1"}})
 	mapper.Add(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}, meta.RESTScopeNamespace)
 
-	client := fake.NewSimpleDynamicClient(runtime.NewScheme())
+	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	input := `
 apiVersion: v1
 kind: ConfigMap

@@ -143,6 +143,11 @@ type StatefulSetInput struct {
 	Namespace string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
 }
 
+type DaemonSetInput struct {
+	Name      string `json:"name" jsonschema:"DaemonSet name"`
+	Namespace string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
+}
+
 type PatchInput struct {
 	Name      string `json:"name" jsonschema:"Resource name"`
 	Namespace string `json:"namespace" jsonschema:"Kubernetes namespace (default: default)"`
@@ -153,6 +158,28 @@ type EmptyInput struct{}
 
 type TopPodsInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"Kubernetes namespace filter (default: all namespaces)"`
+}
+
+func deleteStatefulSet(ctx context.Context, k8s kubernetes.Interface, input StatefulSetInput) *mcp.CallToolResult {
+	if input.Name == "" {
+		return errResult("name is required")
+	}
+	ns := nsOrDefault(input.Namespace)
+	if err := k8s.AppsV1().StatefulSets(ns).Delete(ctx, input.Name, metav1.DeleteOptions{}); err != nil {
+		return errResult("failed to delete statefulset %s/%s: %v", ns, input.Name, err)
+	}
+	return textResult(fmt.Sprintf("⚠️ StatefulSet %s/%s deleted.", ns, input.Name))
+}
+
+func deleteDaemonSet(ctx context.Context, k8s kubernetes.Interface, input DaemonSetInput) *mcp.CallToolResult {
+	if input.Name == "" {
+		return errResult("name is required")
+	}
+	ns := nsOrDefault(input.Namespace)
+	if err := k8s.AppsV1().DaemonSets(ns).Delete(ctx, input.Name, metav1.DeleteOptions{}); err != nil {
+		return errResult("failed to delete daemonset %s/%s: %v", ns, input.Name, err)
+	}
+	return textResult(fmt.Sprintf("⚠️ DaemonSet %s/%s deleted.", ns, input.Name))
 }
 
 // --- Main ---
@@ -1410,6 +1437,28 @@ func main() {
 			}
 
 			return textResult(fmt.Sprintf("⚠️ Deployment %s/%s deleted.", ns, input.Name)), nil, nil
+		})
+
+		// delete_statefulset
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "delete_statefulset",
+			Description: "[DANGEROUS] Delete a StatefulSet and its pods",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input StatefulSetInput) (*mcp.CallToolResult, any, error) {
+			if !requireDangerous("delete_statefulset") {
+				return permDeniedResult("delete_statefulset", ModeDangerous), nil, nil
+			}
+			return deleteStatefulSet(ctx, k8s, input), nil, nil
+		})
+
+		// delete_daemonset
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "delete_daemonset",
+			Description: "[DANGEROUS] Delete a DaemonSet and its pods",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input DaemonSetInput) (*mcp.CallToolResult, any, error) {
+			if !requireDangerous("delete_daemonset") {
+				return permDeniedResult("delete_daemonset", ModeDangerous), nil, nil
+			}
+			return deleteDaemonSet(ctx, k8s, input), nil, nil
 		})
 
 		// apply_yaml
