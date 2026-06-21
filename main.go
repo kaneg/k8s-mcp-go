@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -26,7 +25,6 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/restmapper"
-	"k8s.io/client-go/tools/clientcmd"
 	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
@@ -274,40 +272,10 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	kubeconfig := os.Getenv("KUBECONFIG")
-	if kubeconfig == "" {
-		home, _ := os.UserHomeDir()
-		kubeconfig = filepath.Join(home, ".kube", "config")
-	}
-
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	config, configInfo, err := newKubernetesConfigLoader().load(os.Getenv("KUBECONFIG"))
 	if err != nil {
-		logger.Error("failed to load kubeconfig", "path", kubeconfig, "error", err)
+		logger.Error("failed to load Kubernetes config", "error", err)
 		os.Exit(1)
-	}
-
-	loadingRules := &clientcmd.ClientConfigLoadingRules{}
-	kubeconfigPaths := filepath.SplitList(kubeconfig)
-	if len(kubeconfigPaths) > 1 {
-		loadingRules.Precedence = kubeconfigPaths
-	} else {
-		loadingRules.ExplicitPath = kubeconfig
-	}
-	rawConfig, err := loadingRules.Load()
-	if err != nil {
-		logger.Error("failed to inspect kubeconfig", "path", kubeconfig, "error", err)
-		os.Exit(1)
-	}
-	currentContext := rawConfig.CurrentContext
-	clusterName := ""
-	userName := ""
-	apiServer := ""
-	if ctx, ok := rawConfig.Contexts[currentContext]; ok {
-		clusterName = ctx.Cluster
-		userName = ctx.AuthInfo
-	}
-	if cluster, ok := rawConfig.Clusters[clusterName]; ok {
-		apiServer = cluster.Server
 	}
 
 	k8s, err := kubernetes.NewForConfig(config)
@@ -325,7 +293,8 @@ func main() {
 	logger.Info("k8s-mcp-go starting",
 		"version", version,
 		"mode", *mode,
-		"kubeconfig", kubeconfig,
+		"config_source", configInfo.Source,
+		"kubeconfig", configInfo.Kubeconfig,
 	)
 
 	server := mcp.NewServer(&mcp.Implementation{
@@ -334,10 +303,10 @@ func main() {
 	}, nil)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "server_info",
-		Description: "[READONLY] Show MCP server version, mode, kubeconfig path, and runtime details",
+		Name:        "get_server_info",
+		Description: "[READONLY] Show MCP server version, mode, Kubernetes config source, and runtime details",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input EmptyInput) (*mcp.CallToolResult, any, error) {
-		return textResult(formatServerInfo(*mode, kubeconfig, currentContext, clusterName, userName, apiServer)), nil, nil
+		return textResult(formatServerInfo(*mode, configInfo)), nil, nil
 	})
 
 	// Mode check helpers
@@ -858,9 +827,9 @@ func main() {
 		return textResult(strings.Join(lines, "\n")), nil, nil
 	})
 
-	// cluster_overview
+	// get_cluster_overview
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "cluster_overview",
+		Name:        "get_cluster_overview",
 		Description: "[READONLY] Get a high-level cluster overview: node health, pod counts, resource summary, and problem pods",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input EmptyInput) (*mcp.CallToolResult, any, error) {
 		var lines []string
@@ -968,10 +937,10 @@ func main() {
 		return textResult(strings.Join(lines, "\n")), nil, nil
 	})
 
-	// get_events (NEW)
+	// list_events
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_events",
-		Description: "[READONLY] Get Kubernetes events, optionally filtered by namespace, kind, and name",
+		Name:        "list_events",
+		Description: "[READONLY] List Kubernetes events, optionally filtered by namespace, kind, and name",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input EventsInput) (*mcp.CallToolResult, any, error) {
 		limit := 50
 		if input.Limit > 0 {
@@ -1264,7 +1233,7 @@ func main() {
 				return errResult("failed to restart deployment: %v", err), nil, nil
 			}
 
-			return textResult(fmt.Sprintf("Deployment %s/%s restarted successfully. Use rollout_status to monitor progress.", ns, input.Name)), nil, nil
+			return textResult(fmt.Sprintf("Deployment %s/%s restarted successfully. Use get_rollout_status to monitor progress.", ns, input.Name)), nil, nil
 		})
 
 		// restart_statefulset
@@ -1286,7 +1255,7 @@ func main() {
 				return errResult("failed to restart statefulset: %v", err), nil, nil
 			}
 
-			return textResult(fmt.Sprintf("StatefulSet %s/%s restarted successfully. Use rollout_status to monitor progress.", ns, input.Name)), nil, nil
+			return textResult(fmt.Sprintf("StatefulSet %s/%s restarted successfully. Use get_rollout_status to monitor progress.", ns, input.Name)), nil, nil
 		})
 
 		// scale_deployment
@@ -1333,13 +1302,13 @@ func main() {
 			return textResult(fmt.Sprintf("Deployment %s/%s container '%s' image updated to '%s'.", ns, input.Name, input.Container, input.Image)), nil, nil
 		})
 
-		// rollout_status
+		// get_rollout_status
 		mcp.AddTool(server, &mcp.Tool{
-			Name:        "rollout_status",
+			Name:        "get_rollout_status",
 			Description: "[READWRITE] Check rollout status of a deployment",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, input RolloutInput) (*mcp.CallToolResult, any, error) {
-			if !requireReadWrite("rollout_status") {
-				return permDeniedResult("rollout_status", ModeReadWrite), nil, nil
+			if !requireReadWrite("get_rollout_status") {
+				return permDeniedResult("get_rollout_status", ModeReadWrite), nil, nil
 			}
 			if input.Name == "" {
 				return errResult("name is required"), nil, nil

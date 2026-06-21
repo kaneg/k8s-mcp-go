@@ -170,12 +170,14 @@ With `k8s-mcp-go`, you decide whether the assistant can:
 ## Available Tools (35 total)
 
 Tools are grouped by permission level.
+Names start with an action verb such as `get`, `list`, or `delete`; `top_nodes`
+and `top_pods` retain Kubernetes' established `kubectl top` terminology.
 
 ### Readonly (24)
 
 | Tool | Description |
 |------|-------------|
-| `server_info` | Show server version, mode, kubeconfig path, and runtime details |
+| `get_server_info` | Show server version, mode, Kubernetes config source, and runtime details |
 | `resolve_workload` | Resolve an app/workload name to matching resources and suggested next tools |
 | `list_pods` | List pods; supports `all_namespaces=true` |
 | `get_pod` | Get pod details |
@@ -197,8 +199,8 @@ Tools are grouped by permission level.
 | `top_pods` | Current pod CPU and memory usage |
 | `list_nodes` | List cluster nodes |
 | `list_namespaces` | List namespaces |
-| `cluster_overview` | Cluster health summary |
-| `get_events` | List events |
+| `get_cluster_overview` | Cluster health summary |
+| `list_events` | List events |
 
 ### Readwrite (7)
 
@@ -208,7 +210,7 @@ Tools are grouped by permission level.
 | `restart_deployment` | Rolling restart a deployment |
 | `restart_statefulset` | Rolling restart a statefulset |
 | `set_image` | Update container image |
-| `rollout_status` | Check rollout progress |
+| `get_rollout_status` | Check rollout progress |
 | `create_namespace` | Create a new namespace |
 | `patch_deployment` | Apply strategic merge patch |
 
@@ -233,11 +235,25 @@ resources through Kubernetes discovery.
 {"api_version":"rbac.authorization.k8s.io/v1","kind":"ClusterRole","name":"auditor"}
 ```
 
+## Kubernetes Configuration
+
+Configuration is selected in this order:
+
+1. The file specified by `KUBECONFIG`, when set.
+2. The Pod's in-cluster ServiceAccount configuration.
+3. `~/.kube/config` when running outside a cluster.
+
+An explicit `KUBECONFIG` is authoritative. If it cannot be loaded, the server
+returns an error instead of silently switching to the Pod's ServiceAccount.
+In-cluster configuration uses Kubernetes' mounted token file so projected
+ServiceAccount token rotation continues to work without copying tokens into a
+kubeconfig.
+
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `KUBECONFIG` | Path to kubeconfig file (default: `~/.kube/config`) |
+| `KUBECONFIG` | Explicit kubeconfig path. When unset, use in-cluster configuration or fall back to `~/.kube/config`. |
 
 ## Build from Source
 

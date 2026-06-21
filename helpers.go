@@ -73,10 +73,11 @@ func permDeniedResult(tool, required string) *mcp.CallToolResult {
 	return errResult("permission denied: tool '%s' requires '%s' mode. Restart with --mode=%s", tool, required, required)
 }
 
-func formatServerInfo(mode, kubeconfig, currentContext, cluster, user, server string) string {
+func formatServerInfo(mode string, info kubernetesConfigInfo) string {
 	return fmt.Sprintf(`Name: k8s-mcp-go
 Version: %s
 Mode: %s
+Config Source: %s
 Kubeconfig: %s
 Current Context: %s
 Cluster: %s
@@ -87,11 +88,12 @@ Arch: %s
 Go: %s`,
 		version,
 		mode,
-		kubeconfig,
-		currentContext,
-		cluster,
-		user,
-		server,
+		info.Source,
+		info.Kubeconfig,
+		info.CurrentContext,
+		info.Cluster,
+		info.User,
+		info.APIServer,
 		runtime.GOOS,
 		runtime.GOARCH,
 		runtime.Version(),

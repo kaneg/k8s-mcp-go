@@ -119,12 +119,20 @@ func TestPermDeniedResult(t *testing.T) {
 }
 
 func TestFormatServerInfo_IncludesOperationalDetails(t *testing.T) {
-	got := formatServerInfo("readwrite", "/tmp/kubeconfig", "dev", "dev-cluster", "dev-user", "https://dev.example.com")
+	got := formatServerInfo("readwrite", kubernetesConfigInfo{
+		Source:         configSourceKubeconfig,
+		Kubeconfig:     "/tmp/kubeconfig",
+		CurrentContext: "dev",
+		Cluster:        "dev-cluster",
+		User:           "dev-user",
+		APIServer:      "https://dev.example.com",
+	})
 
 	for _, want := range []string{
 		"Name: k8s-mcp-go",
 		"Version: ",
 		"Mode: readwrite",
+		"Config Source: kubeconfig",
 		"Kubeconfig: /tmp/kubeconfig",
 		"Current Context: dev",
 		"Cluster: dev-cluster",
@@ -133,6 +141,31 @@ func TestFormatServerInfo_IncludesOperationalDetails(t *testing.T) {
 		"OS: ",
 		"Arch: ",
 		"Go: ",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("formatServerInfo() missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestFormatServerInfo_InClusterDetails(t *testing.T) {
+	got := formatServerInfo("readonly", kubernetesConfigInfo{
+		Source:         configSourceInCluster,
+		Kubeconfig:     kubeconfigNotUsed,
+		CurrentContext: "(in-cluster)",
+		Cluster:        "in-cluster",
+		User:           "service-account",
+		APIServer:      "https://10.43.0.1:443",
+	})
+
+	for _, want := range []string{
+		"Mode: readonly",
+		"Config Source: in-cluster",
+		"Kubeconfig: (not used)",
+		"Current Context: (in-cluster)",
+		"Cluster: in-cluster",
+		"User: service-account",
+		"API Server: https://10.43.0.1:443",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("formatServerInfo() missing %q in:\n%s", want, got)
@@ -288,15 +321,15 @@ func TestSortEventsByTime_MixedTimestamps(t *testing.T) {
 func TestToolDescriptions_HavePermissionPrefix(t *testing.T) {
 	// This is a static check - we verify the expected tool list has correct prefixes
 	readonlyTools := []string{
-		"server_info", "resolve_workload", "list_pods", "get_pod", "get_pod_logs", "list_services", "get_service",
+		"get_server_info", "resolve_workload", "list_pods", "get_pod", "get_pod_logs", "list_services", "get_service",
 		"list_deployments", "get_deployment", "list_statefulsets", "get_statefulset",
-		"list_namespaces", "list_nodes", "cluster_overview", "get_events",
+		"list_namespaces", "list_nodes", "get_cluster_overview", "list_events",
 		"list_configmaps", "get_configmap", "list_secrets", "get_secret", "top_nodes",
 		"top_pods", "list_pvc", "list_ingress", "list_jobs",
 	}
 	readwriteTools := []string{
 		"restart_deployment", "restart_statefulset", "scale_deployment", "set_image",
-		"rollout_status", "create_namespace", "patch_deployment",
+		"get_rollout_status", "create_namespace", "patch_deployment",
 	}
 	dangerousTools := []string{
 		"delete_pod", "delete_deployment", "delete_statefulset", "delete_daemonset", "delete_resource", "delete_namespace", "apply_yaml",
